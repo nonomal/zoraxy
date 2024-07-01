@@ -1,3 +1,17 @@
+# v3.0.7 20 Jun 2024
+
++ Fixed redirection enable bug [#199](https://github.com/tobychui/zoraxy/issues/199)
++ Fixed header tool user agent rewrite sequence
++ Optimized rate limit UI
++ Added HSTS and Permission Policy Editor [#163](https://github.com/tobychui/zoraxy/issues/163)
++ Docker UX optimization start parameter `-docker`
++ Docker container selector implementation for conditional compilations for Windows
+
+From contributors:
+
++ Add Rate Limits Limits to Zoraxy fixes [185](https://github.com/tobychui/zoraxy/issues/185) by [Kirari04](https://github.com/Kirari04)
++ Add docker containers list to set rule by [7brend7](https://github.com/7brend7) [PR202](https://github.com/tobychui/zoraxy/pull/202)
+
 # v3.0.6 10 Jun 2024
 
 + Added fastly_client_ip to X-Real-IP auto rewrite
@@ -13,6 +27,9 @@
 + Added stream proxy auto start [#169](https://github.com/tobychui/zoraxy/issues/169)
 + Optimized UX for reminding user to click Apply after port change
 + Added version number to footer [#160](https://github.com/tobychui/zoraxy/issues/160)
+
+From contributors:
+
 + Fixed missing / unnecessary error check [PR187](https://github.com/tobychui/zoraxy/pull/187) by [Kirari04](https://github.com/Kirari04)
 
 # v3.0.5 May 26 2024

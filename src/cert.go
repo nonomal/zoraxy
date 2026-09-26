@@ -1,317 +1,210 @@
 package main
 
 import (
-	"crypto/x509"
 	"encoding/json"
-	"encoding/pem"
-	"fmt"
-	"io"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
-	"imuslab.com/zoraxy/mod/acme"
 	"imuslab.com/zoraxy/mod/utils"
 )
 
-// Check if the default certificates is correctly setup
-func handleDefaultCertCheck(w http.ResponseWriter, r *http.Request) {
-	type CheckResult struct {
-		DefaultPubExists bool
-		DefaultPriExists bool
-	}
-
-	pub, pri := tlsCertManager.DefaultCertExistsSep()
-	js, _ := json.Marshal(CheckResult{
-		pub,
-		pri,
-	})
-
-	utils.SendJSONResponse(w, string(js))
-}
-
-// Return a list of domains where the certificates covers
-func handleListCertificate(w http.ResponseWriter, r *http.Request) {
-	filenames, err := tlsCertManager.ListCertDomains()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	showDate, _ := utils.GetPara(r, "date")
-	if showDate == "true" {
-		type CertInfo struct {
-			Domain           string
-			LastModifiedDate string
-			ExpireDate       string
-			RemainingDays    int
-			UseDNS           bool
-		}
-
-		results := []*CertInfo{}
-
-		for _, filename := range filenames {
-			certFilepath := filepath.Join(tlsCertManager.CertStore, filename+".pem")
-			//keyFilepath := filepath.Join(tlsCertManager.CertStore, filename+".key")
-			fileInfo, err := os.Stat(certFilepath)
-			if err != nil {
-				utils.SendErrorResponse(w, "invalid domain certificate discovered: "+filename)
-				return
-			}
-			modifiedTime := fileInfo.ModTime().Format("2006-01-02 15:04:05")
-
-			certExpireTime := "Unknown"
-			certBtyes, err := os.ReadFile(certFilepath)
-			expiredIn := 0
-			if err != nil {
-				//Unable to load this file
-				continue
-			} else {
-				//Cert loaded. Check its expire time
-				block, _ := pem.Decode(certBtyes)
-				if block != nil {
-					cert, err := x509.ParseCertificate(block.Bytes)
-					if err == nil {
-						certExpireTime = cert.NotAfter.Format("2006-01-02 15:04:05")
-
-						duration := cert.NotAfter.Sub(time.Now())
-
-						// Convert the duration to days
-						expiredIn = int(duration.Hours() / 24)
-					}
-				}
-			}
-			certInfoFilename := filepath.Join(tlsCertManager.CertStore, filename+".json")
-			useDNSValidation := false                                //Default to false for HTTP TLS certificates
-			certInfo, err := acme.LoadCertInfoJSON(certInfoFilename) //Note: Not all certs have info json
-			if err == nil {
-				useDNSValidation = certInfo.UseDNS
-			}
-
-			thisCertInfo := CertInfo{
-				Domain:           filename,
-				LastModifiedDate: modifiedTime,
-				ExpireDate:       certExpireTime,
-				RemainingDays:    expiredIn,
-				UseDNS:           useDNSValidation,
-			}
-
-			results = append(results, &thisCertInfo)
-		}
-
-		js, _ := json.Marshal(results)
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(js)
-	} else {
-		response, err := json.Marshal(filenames)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(response)
-	}
-
-}
-
-// List all certificates and map all their domains to the cert filename
-func handleListDomains(w http.ResponseWriter, r *http.Request) {
-	filenames, err := os.ReadDir("./conf/certs/")
-
-	if err != nil {
-		utils.SendErrorResponse(w, err.Error())
-		return
-	}
-
-	certnameToDomainMap := map[string]string{}
-	for _, filename := range filenames {
-		if filename.IsDir() {
-			continue
-		}
-		certFilepath := filepath.Join("./conf/certs/", filename.Name())
-
-		certBtyes, err := os.ReadFile(certFilepath)
-		if err != nil {
-			// Unable to load this file
-			SystemWideLogger.PrintAndLog("TLS", "Unable to load certificate: "+certFilepath, err)
-			continue
-		} else {
-			// Cert loaded. Check its expiry time
-			block, _ := pem.Decode(certBtyes)
-			if block != nil {
-				cert, err := x509.ParseCertificate(block.Bytes)
-				if err == nil {
-					certname := strings.TrimSuffix(filepath.Base(certFilepath), filepath.Ext(certFilepath))
-					for _, dnsName := range cert.DNSNames {
-						certnameToDomainMap[dnsName] = certname
-					}
-					certnameToDomainMap[cert.Subject.CommonName] = certname
-				}
-			}
-		}
-	}
-
-	requireCompact, _ := utils.GetPara(r, "compact")
-	if requireCompact == "true" {
-		result := make(map[string][]string)
-
-		for key, value := range certnameToDomainMap {
-			if _, ok := result[value]; !ok {
-				result[value] = make([]string, 0)
-			}
-
-			result[value] = append(result[value], key)
-		}
-
-		js, _ := json.Marshal(result)
-		utils.SendJSONResponse(w, string(js))
-		return
-	}
-
-	js, _ := json.Marshal(certnameToDomainMap)
-	utils.SendJSONResponse(w, string(js))
-}
-
 // Handle front-end toggling TLS mode
 func handleToggleTLSProxy(w http.ResponseWriter, r *http.Request) {
-	currentTlsSetting := false
+	currentTlsSetting := true //Default to true
+	if dynamicProxyRouter.Option != nil {
+		currentTlsSetting = dynamicProxyRouter.Option.UseTls
+	}
 	if sysdb.KeyExists("settings", "usetls") {
 		sysdb.Read("settings", "usetls", &currentTlsSetting)
 	}
 
-	newState, err := utils.PostPara(r, "set")
-	if err != nil {
-		//No setting. Get the current status
+	switch r.Method {
+	case http.MethodGet:
+		//Get the current status
 		js, _ := json.Marshal(currentTlsSetting)
 		utils.SendJSONResponse(w, string(js))
-	} else {
-		if newState == "true" {
+	case http.MethodPost:
+		newState, err := utils.PostBool(r, "set")
+		if err != nil {
+			utils.SendErrorResponse(w, "new state not set or invalid")
+			return
+		}
+		if newState {
 			sysdb.Write("settings", "usetls", true)
 			SystemWideLogger.Println("Enabling TLS mode on reverse proxy")
 			dynamicProxyRouter.UpdateTLSSetting(true)
-		} else if newState == "false" {
+		} else {
 			sysdb.Write("settings", "usetls", false)
 			SystemWideLogger.Println("Disabling TLS mode on reverse proxy")
 			dynamicProxyRouter.UpdateTLSSetting(false)
-		} else {
-			utils.SendErrorResponse(w, "invalid state given. Only support true or false")
-			return
 		}
-
 		utils.SendOK(w)
-
+	default:
+		http.Error(w, "405 - Method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
-// Handle the GET and SET of reverse proxy TLS versions
-func handleSetTlsRequireLatest(w http.ResponseWriter, r *http.Request) {
-	newState, err := utils.PostPara(r, "set")
-	if err != nil {
-		//GET
-		var reqLatestTLS bool = false
-		if sysdb.KeyExists("settings", "forceLatestTLS") {
-			sysdb.Read("settings", "forceLatestTLS", &reqLatestTLS)
-		}
+func minTlsVersionStringToUint16(version string) uint16 {
+	// Update the setting
+	var tlsVersionUint16 uint16
+	switch version {
+	case "1.0":
+		tlsVersionUint16 = 0x0301
+	case "1.1":
+		tlsVersionUint16 = 0x0302
+	case "1.2":
+		tlsVersionUint16 = 0x0303
+	case "1.3":
+		tlsVersionUint16 = 0x0304
+	}
+	return tlsVersionUint16
+}
 
-		js, _ := json.Marshal(reqLatestTLS)
+// Handle the GET and SET of reverse proxy minimum TLS version
+func handleSetTlsMinVersion(w http.ResponseWriter, r *http.Request) {
+	newVersion, err := utils.PostPara(r, "set")
+	if err != nil {
+		// GET
+		var minTLSVersion string = "1.2" // Default to 1.2
+		if sysdb.KeyExists("settings", "minTLSVersion") {
+			sysdb.Read("settings", "minTLSVersion", &minTLSVersion)
+		}
+		js, _ := json.Marshal(minTLSVersion)
 		utils.SendJSONResponse(w, string(js))
-	} else {
-		if newState == "true" {
-			sysdb.Write("settings", "forceLatestTLS", true)
-			SystemWideLogger.Println("Updating minimum TLS version to v1.2 or above")
-			dynamicProxyRouter.UpdateTLSVersion(true)
-		} else if newState == "false" {
-			sysdb.Write("settings", "forceLatestTLS", false)
-			SystemWideLogger.Println("Updating minimum TLS version to v1.0 or above")
-			dynamicProxyRouter.UpdateTLSVersion(false)
-		} else {
-			utils.SendErrorResponse(w, "invalid state given")
-		}
+		return
 	}
+
+	// Validate input
+	allowed := map[string]bool{"1.0": true, "1.1": true, "1.2": true, "1.3": true}
+	if !allowed[newVersion] {
+		utils.SendErrorResponse(w, "invalid TLS version")
+		return
+	}
+
+	sysdb.Write("settings", "minTLSVersion", newVersion)
+	tlsVersionUint16 := minTlsVersionStringToUint16(newVersion)
+	// Update the setting
+	SystemWideLogger.PrintAndLog("TLS", "Updating minimum TLS version to v"+newVersion+" or above", nil)
+	dynamicProxyRouter.SetTlsMinVersion(tlsVersionUint16)
+	utils.SendOK(w)
 }
 
-// Handle upload of the certificate
-func handleCertUpload(w http.ResponseWriter, r *http.Request) {
-	// check if request method is POST
-	if r.Method != "POST" {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	// get the key type
-	keytype, err := utils.GetPara(r, "ktype")
-	overWriteFilename := ""
-	if err != nil {
-		http.Error(w, "Not defined key type (pub / pri)", http.StatusBadRequest)
-		return
-	}
-
+func handleCertTryResolve(w http.ResponseWriter, r *http.Request) {
 	// get the domain
 	domain, err := utils.GetPara(r, "domain")
 	if err != nil {
-		//Assume localhost
-		domain = "default"
-	}
-
-	if keytype == "pub" {
-		overWriteFilename = domain + ".pem"
-	} else if keytype == "pri" {
-		overWriteFilename = domain + ".key"
-	} else {
-		http.Error(w, "Not supported keytype: "+keytype, http.StatusBadRequest)
+		utils.SendErrorResponse(w, "invalid domain given")
 		return
 	}
 
-	// parse multipart form data
-	err = r.ParseMultipartForm(10 << 20) // 10 MB
+	// get the proxy rule, the pass in domain value must be root or matching domain
+	proxyRule, err := dynamicProxyRouter.GetProxyEndpointById(domain, false)
 	if err != nil {
-		http.Error(w, "Failed to parse form data", http.StatusBadRequest)
-		return
+		//Try to resolve the domain via alias
+		proxyRule, err = dynamicProxyRouter.GetProxyEndpointByAlias(domain)
+		if err != nil {
+			//No matching rule found
+			utils.SendErrorResponse(w, "proxy rule not found for domain: "+domain)
+			return
+		}
 	}
 
-	// get file from form data
-	file, _, err := r.FormFile("file")
-	if err != nil {
-		http.Error(w, "Failed to get file", http.StatusBadRequest)
-		return
-	}
-	defer file.Close()
-
-	// create file in upload directory
-	os.MkdirAll("./conf/certs", 0775)
-	f, err := os.Create(filepath.Join("./conf/certs", overWriteFilename))
-	if err != nil {
-		http.Error(w, "Failed to create file", http.StatusInternalServerError)
-		return
-	}
-	defer f.Close()
-
-	// copy file contents to destination file
-	_, err = io.Copy(f, file)
-	if err != nil {
-		http.Error(w, "Failed to save file", http.StatusInternalServerError)
-		return
+	// list all the alias domains for this rule
+	allDomains := []string{proxyRule.RootOrMatchingDomain}
+	aliasDomains := []string{}
+	for _, alias := range proxyRule.MatchingDomainAlias {
+		if alias != "" {
+			aliasDomains = append(aliasDomains, alias)
+			allDomains = append(allDomains, alias)
+		}
 	}
 
-	//Update cert list
-	tlsCertManager.UpdateLoadedCertList()
+	// Try to resolve the domain
+	domainKeyPairs := map[string]string{}
+	for _, thisDomain := range allDomains {
+		pubkey, prikey, err := tlsCertManager.GetCertificateByHostname(thisDomain)
+		if err != nil {
+			utils.SendErrorResponse(w, err.Error())
+			return
+		}
 
-	// send response
-	fmt.Fprintln(w, "File upload successful!")
+		//Make sure pubkey and private key are not empty
+		if pubkey == "" || prikey == "" {
+			domainKeyPairs[thisDomain] = ""
+		} else {
+			//Store the key pair
+			keyname := strings.TrimSuffix(filepath.Base(pubkey), filepath.Ext(pubkey))
+			if keyname == "localhost" {
+				//Internal certs like localhost should not be used
+				//report as "fallback" key
+				keyname = "fallback certificate"
+			}
+			domainKeyPairs[thisDomain] = keyname
+		}
+
+	}
+
+	//A domain must be UseDNSValidation if it is a wildcard domain or its alias is a wildcard domain
+	useDNSValidation := strings.HasPrefix(proxyRule.RootOrMatchingDomain, "*")
+	for _, alias := range aliasDomains {
+		if strings.HasPrefix(alias, "*") || strings.HasPrefix(domain, "*") {
+			useDNSValidation = true
+		}
+	}
+
+	type CertInfo struct {
+		Domain           string            `json:"domain"`
+		AliasDomains     []string          `json:"alias_domains"`
+		DomainKeyPair    map[string]string `json:"domain_key_pair"`
+		UseDNSValidation bool              `json:"use_dns_validation"`
+	}
+
+	result := &CertInfo{
+		Domain:           proxyRule.RootOrMatchingDomain,
+		AliasDomains:     aliasDomains,
+		DomainKeyPair:    domainKeyPairs,
+		UseDNSValidation: useDNSValidation,
+	}
+
+	js, _ := json.Marshal(result)
+	utils.SendJSONResponse(w, string(js))
 }
 
-// Handle cert remove
-func handleCertRemove(w http.ResponseWriter, r *http.Request) {
+func handleSetDomainPreferredCertificate(w http.ResponseWriter, r *http.Request) {
+	//Get the domain
 	domain, err := utils.PostPara(r, "domain")
 	if err != nil {
 		utils.SendErrorResponse(w, "invalid domain given")
 		return
 	}
-	err = tlsCertManager.RemoveCert(domain)
+
+	//Get the certificate name
+	certName, err := utils.PostPara(r, "certname")
 	if err != nil {
-		utils.SendErrorResponse(w, err.Error())
+		utils.SendErrorResponse(w, "invalid certificate name given")
+		return
 	}
+
+	//Load the target endpoint
+	ept, err := dynamicProxyRouter.GetProxyEndpointById(domain, true)
+	if err != nil {
+		utils.SendErrorResponse(w, "proxy rule not found for domain: "+domain)
+		return
+	}
+
+	//Set the preferred certificate for the domain
+	err = dynamicProxyRouter.SetPreferredCertificateForDomain(ept, domain, certName)
+	if err != nil {
+		utils.SendErrorResponse(w, "failed to set preferred certificate: "+err.Error())
+		return
+	}
+
+	err = SaveReverseProxyConfig(ept)
+	if err != nil {
+		utils.SendErrorResponse(w, "failed to save reverse proxy config: "+err.Error())
+		return
+	}
+
+	utils.SendOK(w)
 }

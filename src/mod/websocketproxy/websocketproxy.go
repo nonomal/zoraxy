@@ -3,6 +3,7 @@ package websocketproxy
 
 import (
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -10,9 +11,14 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/gorilla/websocket"
+	"imuslab.com/zoraxy/mod/dynamicproxy/rewrite"
+	"imuslab.com/zoraxy/mod/info/logger"
 )
+
+const defaultWebsocketTimeout = 300 * time.Second
 
 var (
 	// DefaultUpgrader specifies the parameters for upgrading an HTTP
@@ -54,8 +60,13 @@ type WebsocketProxy struct {
 
 // Additional options for websocket proxy runtime
 type Options struct {
-	SkipTLSValidation bool //Skip backend TLS validation
-	SkipOriginCheck   bool //Skip origin check
+	SkipTLSValidation              bool                         //Skip backend TLS validation
+	SkipOriginCheck                bool                         //Skip origin check
+	CopyAllHeaders                 bool                         //Copy all headers from incoming request to backend request
+	UserDefinedHeaders             []*rewrite.UserDefinedHeader //User defined headers
+	Logger                         *logger.Logger               //Logger, can be nil
+	Timeout                        int64                        //Connection timeout in seconds, 0 means default (300 seconds)
+	EnableTimeoutRefreshOnActivity bool                         //Refresh websocket connection deadline on activity, requires websocket timeout to be set
 }
 
 // ProxyHandler returns a new http.Handler interface that reverse proxies the
@@ -75,20 +86,65 @@ func NewProxy(target *url.URL, options Options) *WebsocketProxy {
 		u.RawQuery = r.URL.RawQuery
 		return &u
 	}
-	return &WebsocketProxy{Backend: backend, Verbal: false, Options: options}
+
+	// Create a new websocket proxy
+	wsprox := &WebsocketProxy{Backend: backend, Verbal: false, Options: options}
+	if options.CopyAllHeaders {
+		wsprox.Director = DefaultDirector
+	}
+
+	return wsprox
+}
+
+// Utilities function for log printing
+func (w *WebsocketProxy) Println(messsage string, err error) {
+	if w.Options.Logger != nil {
+		w.Options.Logger.PrintAndLog("websocket", messsage, err)
+		return
+	}
+	log.Println("[websocketproxy] [system:info]"+messsage, err)
+}
+
+// DefaultDirector is the default implementation of Director, which copies
+// all headers from the incoming request to the outgoing request.
+func DefaultDirector(r *http.Request, h http.Header) {
+	//Copy all header values from request to target header
+	for k, vv := range r.Header {
+		for _, v := range vv {
+			h.Set(k, v)
+		}
+	}
+
+	// Remove hop-by-hop headers
+	for _, removePendingHeader := range []string{
+		"Connection",
+		"Keep-Alive",
+		"Proxy-Authenticate",
+		"Proxy-Authorization",
+		"Te",
+		"Trailers",
+		"Transfer-Encoding",
+		"Sec-WebSocket-Extensions",
+		"Sec-WebSocket-Key",
+		"Sec-WebSocket-Protocol",
+		"Sec-WebSocket-Version",
+		"Upgrade",
+	} {
+		h.Del(removePendingHeader)
+	}
 }
 
 // ServeHTTP implements the http.Handler that proxies WebSocket connections.
 func (w *WebsocketProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	if w.Backend == nil {
-		log.Println("websocketproxy: backend function is not defined")
+		w.Println("Invalid websocket backend configuration", errors.New("backend function not found"))
 		http.Error(rw, "internal server error (code: 1)", http.StatusInternalServerError)
 		return
 	}
 
 	backendURL := w.Backend(req)
 	if backendURL == nil {
-		log.Println("websocketproxy: backend URL is nil")
+		w.Println("Invalid websocket backend configuration", errors.New("backend URL is nil"))
 		http.Error(rw, "internal server error (code: 2)", http.StatusInternalServerError)
 		return
 	}
@@ -121,6 +177,11 @@ func (w *WebsocketProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	if req.Host != "" {
 		requestHeader.Set("Host", req.Host)
 	}
+	if userAgent := req.Header.Get("User-Agent"); userAgent != "" {
+		requestHeader.Set("User-Agent", userAgent)
+	} else {
+		requestHeader.Set("User-Agent", "zoraxy-wsproxy/1.1")
+	}
 
 	// Pass X-Forwarded-For headers too, code below is a part of
 	// httputil.ReverseProxy. See http://en.wikipedia.org/wiki/X-Forwarded-For
@@ -144,10 +205,33 @@ func (w *WebsocketProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		requestHeader.Set("X-Forwarded-Proto", "https")
 	}
 
-	// Enable the director to copy any additional headers it desires for
-	// forwarding to the remote server.
-	if w.Director != nil {
-		w.Director(req, requestHeader)
+	// Replace header variables and copy user-defined headers
+	if w.Options.CopyAllHeaders {
+		// Rewrite the user defined headers
+		// This is reported to be not compatible with Proxmox and Home Assistant
+		// but required by some other projects like MeshCentral
+		// we will make this optional
+		rewrittenUserDefinedHeaders := rewrite.PopulateRequestHeaderVariables(req, w.Options.UserDefinedHeaders)
+		upstreamHeaders, _ := rewrite.SplitUpDownStreamHeaders(&rewrite.HeaderRewriteOptions{
+			UserDefinedHeaders: rewrittenUserDefinedHeaders,
+		})
+		for _, headerValuePair := range upstreamHeaders {
+			//Skip empty header pairs
+			if len(headerValuePair) < 2 {
+				continue
+			}
+			//Do not copy Upgrade and Connection headers, it will be handled by the upgrader
+			if strings.EqualFold(headerValuePair[0], "Upgrade") || strings.EqualFold(headerValuePair[0], "Connection") {
+				continue
+			}
+			requestHeader.Set(headerValuePair[0], headerValuePair[1])
+		}
+
+		// Enable the director to copy any additional headers it desires for
+		// forwarding to the remote server.
+		if w.Director != nil {
+			w.Director(req, requestHeader)
+		}
 	}
 
 	// Connect to the backend URL, also pass the headers we get from the requst
@@ -158,13 +242,13 @@ func (w *WebsocketProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	// http://tools.ietf.org/html/draft-ietf-hybi-websocket-multiplexing-01
 	connBackend, resp, err := dialer.Dial(backendURL.String(), requestHeader)
 	if err != nil {
-		log.Printf("websocketproxy: couldn't dial to remote backend url %s", err)
+		w.Println("Couldn't dial to remote backend url "+backendURL.String(), err)
 		if resp != nil {
 			// If the WebSocket handshake fails, ErrBadHandshake is returned
 			// along with a non-nil *http.Response so that callers can handle
 			// redirects, authentication, etcetera.
 			if err := copyResponse(rw, resp); err != nil {
-				log.Printf("websocketproxy: couldn't write response after failed remote backend handshake: %s", err)
+				w.Println("Couldn't write response after failed remote backend handshake to "+backendURL.String(), err)
 			}
 		} else {
 			http.Error(rw, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
@@ -173,10 +257,14 @@ func (w *WebsocketProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	}
 	defer connBackend.Close()
 
-	upgrader := w.Upgrader
-	if w.Upgrader == nil {
-		upgrader = DefaultUpgrader
+	//Use a copy of the upgrader for this connection. The upgrader might be
+	//a shared instance (e.g. DefaultUpgrader) across all proxy endpoints,
+	//so mutating it here will leak the settings of this proxy rule to others
+	baseUpgrader := w.Upgrader
+	if baseUpgrader == nil {
+		baseUpgrader = DefaultUpgrader
 	}
+	upgrader := *baseUpgrader
 
 	//Fixing issue #107 by bypassing request origin check
 	if w.Options.SkipOriginCheck {
@@ -198,10 +286,29 @@ func (w *WebsocketProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	// Also pass the header that we gathered from the Dial handshake.
 	connPub, err := upgrader.Upgrade(rw, req, upgradeHeader)
 	if err != nil {
-		log.Printf("websocketproxy: couldn't upgrade %s", err)
+		w.Println("Couldn't upgrade incoming request", err)
 		return
 	}
 	defer connPub.Close()
+
+	// Determine the connection timeout
+
+	var connTimeout time.Duration
+	if w.Options.Timeout > 0 {
+		connTimeout = time.Duration(w.Options.Timeout) * time.Second
+	} else {
+		connTimeout = defaultWebsocketTimeout
+	}
+
+	// Workaround for issue #1159
+	// Apply deadlines to both connections if timeout is enabled
+	if w.Options.EnableTimeoutRefreshOnActivity {
+		deadline := time.Now().Add(connTimeout)
+		_ = connPub.SetReadDeadline(deadline)
+		_ = connPub.SetWriteDeadline(deadline)
+		_ = connBackend.SetReadDeadline(deadline)
+		_ = connBackend.SetWriteDeadline(deadline)
+	}
 
 	errClient := make(chan error, 1)
 	errBackend := make(chan error, 1)
@@ -219,11 +326,21 @@ func (w *WebsocketProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 				dst.WriteMessage(websocket.CloseMessage, m)
 				break
 			}
+
+			if w.Options.EnableTimeoutRefreshOnActivity {
+				// Refresh deadline on activity
+				newDeadline := time.Now().Add(connTimeout)
+				_ = src.SetReadDeadline(newDeadline)
+				_ = dst.SetWriteDeadline(newDeadline)
+			}
+
+			// Write the message to the destination connection
 			err = dst.WriteMessage(msgType, msg)
 			if err != nil {
 				errc <- err
 				break
 			}
+
 		}
 	}
 

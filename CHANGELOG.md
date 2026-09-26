@@ -1,3 +1,346 @@
+# v3.3.4 22 Aug 2026
+
++ Fix: statistic bounded maps by [ElmoViggiani](https://github.com/ElmoViggiani) in [#1191](https://github.com/tobychui/zoraxy/issues/1191)
++ Fix: Plugin Manager UI: iframe height and Developer Settings accordion by [ElmoViggiani](https://github.com/ElmoViggiani) in [#1211](https://github.com/tobychui/zoraxy/issues/1211)
++ feat(forward-auth): add Ignored Paths by [CrazyWolf13](https://github.com/CrazyWolf13)
++ fix: port80 listener toggle and default site routing on HTTP by @yannickid in [#1184](https://github.com/tobychui/zoraxy/issues/1184)
++ tlscert: use name-based fallback cert instead of file renaming by [zen8841](https://github.com/zen8841)1 in [#1218](https://github.com/tobychui/zoraxy/issues/1218)
++ fix 1217: frontend js forgot to call parameter by [zen8841](https://github.com/zen8841) in [#1221](https://github.com/tobychui/zoraxy/issues/1221)
++ Docker hardening by [PassiveLemon](https://github.com/PassiveLemon)
++ Fix: restore per-request TLS SNI for IP-addressed HTTPS upstreams by [ElmoViggiani](https://github.com/ElmoViggiani) in [#1228](https://github.com/tobychui/zoraxy/issues/1228)
++ feat(forward-auth): bulk apply/remove vdir for forward auth hosts by [CrazyWolf13](https://github.com/CrazyWolf13)
++ Feature (acme): custom acme preferred ca by [jacosta57](https://github.com/jacosta57)
++ fix: bulk-vdir: handle edited virtual directories as conflict by [CrazyWolf13](https://github.com/CrazyWolf13) in [#1237](https://github.com/tobychui/zoraxy/issues/1237)
++ Update to lego v5 by [zen8841](https://github.com/zen8841)
++ Fix SSO redirect loop when SSO URL omits http(s) scheme by [@stantheman0128](https://github.com/@stantheman0128) in [#1238](https://github.com/tobychui/zoraxy/issues/1239)
++ Fix HTTP proxy rate limit UI not loading per-host value (#1107) by [@stantheman0128](https://github.com/@stantheman0128) in [#1238](https://github.com/tobychui/zoraxy/issues/1238)
+
+
+# v3.3.3 09 Jun 2026
+
++ ACME: url.URL support for dnsCredentials by [t510599](https://github.com/t510599)
++ Add a basic CI script by [AnthonyMichaelTDM](https://github.com/AnthonyMichaelTDM)
++ Features: Turnstile for directory by [Klarulor](https://github.com/Klarulor)
++ Fix: Allow Location header rewrite when target matches OriginalHost by [TuxLux40](https://github.com/TuxLux40)
++ Fix certificate file permissions by [devilmonastery](https://github.com/devilmonastery)
++ Update lego to v4.35.2 by [zen8841](https://github.com/zen8841)
++ Update golang version in ci by [zen8841](https://github.com/zen8841)
++ Fix typo in customHeaders.html by [jeremyy294]([zen8841](https://github.com/jeremyy294)
++ Fix [#1169](https://github.com/tobychui/zoraxy/issues/1169) by [zen8841](https://github.com/zen8841)
++ Chore: clean up Docker related files by [PassiveLemon](https://github.com/PassiveLemon)
++ Sync docker change to dev branch by [tobychui]([zen8841](https://github.com/tobychui)
++ Add custom URI for Uptime Monitor health check by [barto95100]([zen8841](https://github.com/barto95100)
++ Fix: set ReadHeaderTimeout and IdleTimeout on main listeners by [ElmoViggiani](https://github.com/ElmoViggiani)
++ Fixed: "Require TLS" upstream on a proxy breaks if upstream sends 302 redirects [#1089](https://github.com/tobychui/zoraxy/issues/1089)
++ Fixed: Virtual Directory duplicating path in redirect [#1106](https://github.com/tobychui/zoraxy/issues/1106)
++ Fixed: Custom check interval for the Uptime Montior [#1091](https://github.com/tobychui/zoraxy/issues/1091)
++ Fixed: Ability to pause redirection rules [#1094](https://github.com/tobychui/zoraxy/issues/1094)
++ Implemented: Disable request logging but don't disable statistical logging [#1072](https://github.com/tobychui/zoraxy/issues/1072)
++ Fixed: Zoraxy crashes with SIGSEGV when using TCP Stream Proxy [#1157](https://github.com/tobychui/zoraxy/issues/1157)
++ Fixed: Configurable WebSocket timeout per proxy rule [#1159](https://github.com/tobychui/zoraxy/issues/1159)
+
+# v3.3.2 21 Mar 2026
+
++ Added Zoraxy Auth SSO
++ Typo fixes by [coddec](https://github.com/coddec)
++ Updated IP blacklist description text by [Psychoboy](https://github.com/Psychoboy)
++ Fix: forward auth saving and defaults by [CrazyWolf13](https://github.com/CrazyWolf13)
++ Update lego to v4.32.0, fix shell script and enable providers for lego by [zen8841](https://github.com/zen8841)
++ Remove: docker webfm env var by [PassiveLemon](https://github.com/PassiveLemon)
++ Fixed: missing headers for WebDAV [#1079](https://github.com/tobychui/zoraxy/issues/1079)
++ Improved: fast-geoip mode takes much less RAM, around now 150MB (compared to previously 800+ MB) fixes [#1007](https://github.com/tobychui/zoraxy/issues/1007)
++ Fixed: Uptime monitor fails when target requires https [#1076](https://github.com/tobychui/zoraxy/issues/1076)
++ Fixed: DNS Challenge Breaks Zoraxy [#1019](https://github.com/tobychui/zoraxy/issues/1019)
++ Fixed: Network Status auto stretch [#669](https://github.com/tobychui/zoraxy/issues/669)
++ Fixed: logview.html executes javascript [#1028](https://github.com/tobychui/zoraxy/issues/1028)
++ Updated dependencies
+
+# v3.3.1 28 Jan 2026
+
++ Add captcha gating by [yeungalan](https://github.com/yeungalan)
++ Address some Docker CVEs by [PassiveLemon](https://github.com/PassiveLemon)
++ Add Proxy Protocol v1/v2 support behind reverse proxies by [jimmyGALLAND](https://github.com/jimmyGALLAND)
++ [docs] Fix typo in SniffResult constant by [kuhnchris](https://github.com/kuhnchris)
++ Fix incorrect status codes and missing error pages in production by [Restorn](https://github.com/kuhnchris)
++ UPDATE_GEOIP should only update if true by [kuhnchris](https://github.com/kuhnchris)
++ Allow plugin API to modify proxy upstreams by [kuhnchris](https://github.com/kuhnchris
++ fix: error checking origin to avoid goroutine panic by [kuhnchris](https://github.com/kuhnchris)
++ Error message & ":" parsing by [kuhnchris](https://github.com/kuhnchris)
++ fix: ui error on null container ports by [eyerrock](https://github.com/eyerrock)
++ Add authentication display to HTTP proxy list by [xaxy55](https://github.com/xaxy55)
++ Update lego to v4.30.1 by [zen8841](https://github.com/zen8841)
++ Fixed Tailscale network marked as country [#918](https://github.com/tobychui/zoraxy/issues/918)
++ Added multiport support
++ Added support for pasting certificates [#928](https://github.com/tobychui/zoraxy/issues/928)
++ Reworked block AI crawler feature [#916](https://github.com/tobychui/zoraxy/issues/916)
++ Fixed empty response on virtual directories on http while tls is enabled [#941](https://github.com/tobychui/zoraxy/issues/941)
++ Fixed high speed toggling cause system panic [#952](https://github.com/tobychui/zoraxy/issues/952)
++ support acme test/staging mode from flags by [jimmyGALLAND](https://github.com/jimmyGALLAND)
++ Fix: Unable to remove path prefix authentication exclusions [#972](https://github.com/tobychui/zoraxy/issues/972)
++ Fix: Zoraxy docker crash [#967](https://github.com/tobychui/zoraxy/issues/967)
++ Fix: web Directory Loader not visible [#980](https://github.com/tobychui/zoraxy/issues/980)
+
+
+# v3.3.0 06 Dec 2025
+
++ Added "Block common exploits"
++ Added "Block AI and Crawlers"
++ Added option to disable statistics
++ Added option to remove user agent
++ Show checkbox for dns challenge in zerossl by [zen8841](https://github.com/tobychui/zoraxy/commits?author=zen8841)
++ Fixed Redirection: include sub-paths checkbox [#874](https://github.com/tobychui/zoraxy/issues/874)
++ Fixed Disable load balance and do not pause upstream for 60s [#896](https://github.com/tobychui/zoraxy/issues/896)
++ Fixed ACME bug [#903](https://github.com/tobychui/zoraxy/issues/903)
++ Fixed redirection bug [#900](https://github.com/tobychui/zoraxy/issues/900)
++ Smaller bugfixes
++ Updated dependencies
+
+
+# v3.2.9 2 Nov 2025
+
++ Add PKCE support with SHA256 challenge method for OAuth2 by [kjagosz](https://github.com/kjagosz) fixes [#852](https://github.com/tobychui/zoraxy/issues/852)
++ Update lego to v4.28.0 by [zen8841](https://github.com/zen8841) fixes [778](https://github.com/tobychui/zoraxy/issues/778)
++ Typo in plugins.html by [mlbarrow](mlbarrow)
++ Moved log rotation options to webmin panel
++ Supported opening tar.gz in the new log viewer
++ Added disable logging function to HTTP proxy rule for high traffic sites
++ Fixed other bugs / improvements [#855](https://github.com/tobychui/zoraxy/issues/855) [#866](https://github.com/tobychui/zoraxy/issues/866) [#867](https://github.com/tobychui/zoraxy/issues/867) [#855](https://github.com/tobychui/zoraxy/issues/856)
+
+# v3.2.8 16 Oct 2025
+
++ Fixed wildcard certificate bug [#845](https://github.com/tobychui/zoraxy/issues/845) by [zen8841](https://github.com/zen8841)
++ Move function:NormalizeDomain to netutils module by [zen8841](https://github.com/zen8841)
++ Add support for Proxy Protocol V1 and V2 in streamproxy configuration by [jemmy1794](https://github.com/jemmy1794)
++ Added user selectable versions for TLS
+
+# v3.2.7 09 Oct 2025
+
++ Update Sidebar CSS by [Saeraphinx](https://github.com/Saeraphinx)
++ fix restart after acme dns challenge by [jimmyGALLAND](https://github.com/jimmyGALLAND)
++ fix acme renew by [jimmyGALLAND](https://github.com/jimmyGALLAND)
+
+
+# v3.2.6 (Prerelease) 16 Sep 2025
+
++ feat(plugins): Implement plugin API key management and authentication middleware by [AnthonyMichaelTDM](https://github.com/AnthonyMichaelTDM)
++ fix: Handle existing symlink in start_zerotier function by [AnthonyMichaelTDM](https://github.com/AnthonyMichaelTDM) [#758](https://github.com/tobychui/zoraxy/issues/758)
++ fix: panics when rewriting headers for websockets, and strange issue with logging across a month boundary by [AnthonyMichaelTDM](https://github.com/AnthonyMichaelTDM) [#771](https://github.com/tobychui/zoraxy/issues/771)
++ add CODEOWNERS file by [AnthonyMichaelTDM](https://github.com/AnthonyMichaelTDM)
++ Update lego to v4.25.2 by [zen8841](https://github.com/zen8841)
++ feat(sso): forward auth body and alternate headers by james-d-elliott [#819](https://github.com/tobychui/zoraxy/issues/819)
++ feat(sso): clear settings by [james-d-elliott](https://github.com/james-d-elliott)
++ feat(plugins): Implement event system w/ POC events by [AnthonyMichaelTDM](https://github.com/AnthonyMichaelTDM)
++ feature: new container environment vars by [PassiveLemon](https://github.com/PassiveLemon)
++ Update example plugins by [AnthonyMichaelTDM](https://github.com/AnthonyMichaelTDM)
++ feat(event system): Flesh out EventPayload interface by [AnthonyMichaelTDM](https://github.com/AnthonyMichaelTDM)
++ feat(plugin API): Plugin-to-plugin-comms by [AnthonyMichaelTDM](https://github.com/AnthonyMichaelTDM)
++ put plugin API on separate mux not protected by CSRF by [AnthonyMichaelTDM](https://github.com/AnthonyMichaelTDM)
++ fix Enable Lan and Loopback [#799](https://github.com/tobychui/zoraxy/issues/799)
+
+
+# v3.2.5 20 Jul 2025
+
+
++ Added new API endpoint /api/proxy/setTlsConfig (for HTTP Proxy Editor TLS tab)
++ Refactored TLS certificate management APIs with new handlers
++ Removed redundant functions from src/cert.go and delegated to tlsCertManager
++ Code optimization in tlscert module
++ Introduced a new constant CONF_FOLDER and updated configuration storage paths (phasing out hard coded paths)
++ Updated functions to set default TLS options when missing, default to SNI
++ Added Proxy Protocol v1 support in stream proxy [jemmy1794](https://github.com/jemmy1794)
++ Fixed Proxy UI bug [jemmy1794](https://github.com/jemmy1794)
++ Fixed assign static server to localhost or all interfaces [#688](https://github.com/tobychui/zoraxy/issues/688)
++ fixed empty SSO parameters by [7brend7](https://github.com/7brend7)
++ sort list of loaded certificates by expire date by [7brend7](https://github.com/7brend7)
++ Docker hardening by [PassiveLemon](https://github.com/PassiveLemon)
++ Fixed sort by destination [#713](https://github.com/tobychui/zoraxy/issues/713)
+
+# v3.2.4 28 Jun 2025
+
+A big release since v3.1.9. Versions from 3.2.0 to 3.2.3 were prereleases.
+
+
++ Added Authentik support by [JokerQyou](https://github.com/tobychui/zoraxy/commits?author=JokerQyou)
++ Added pluginsystem and moved GAN and Zerotier to plugins
++ Add loopback detection [#573](https://github.com/tobychui/zoraxy/issues/573)
++ Fixed Dark theme not working with Advanced Option accordion [#591](https://github.com/tobychui/zoraxy/issues/591)
++ Update logger to include UserAgent by [Raithmir](https://github.com/Raithmir)
++ Fixed memory usage in UI [#600](https://github.com/tobychui/zoraxy/issues/600)
++ Added docker-compose.yml by [SamuelPalubaCZ](https://github.com/tobychui/zoraxy/commits?author=SamuelPalubaCZ)
++ Added more statistics for proxy hosts [#201](https://github.com/tobychui/zoraxy/issues/201) and [#608](https://github.com/tobychui/zoraxy/issues/608)
++ Fixed origin field in logs [#618](https://github.com/tobychui/zoraxy/issues/618)
++ Added FreeBSD support by Andreas Burri
++ Fixed HTTP proxy redirect [#626](https://github.com/tobychui/zoraxy/issues/626)
++ Fixed proxy handling #629](https://github.com/tobychui/zoraxy/issues/629)
++ Move Scope ID handling into CIDR check by [Nirostar](https://github.com/tobychui/zoraxy/commits?author=Nirostar)
++ Prevent the browser from filling the saved Zoraxy login account by [WHFo](https://github.com/tobychui/zoraxy/commits?author=WHFo)
++ Added port number and http proto to http proxy list link
++ Fixed headers for authelia by [james-d-elliott](https://github.com/tobychui/zoraxy/commits?author=james-d-elliott)
++ Refactored docker container list and UI improvements by [eyerrock](https://github.com/tobychui/zoraxy/commits?author=eyerrock)
++ Refactored Dockerfile by [PassiveLemon](https://github.com/tobychui/zoraxy/commits?author=PassiveLemon)
++ Added new HTTP proxy UI
++ Added inbound host name edit function
++ Added static web server option to disable listen to all interface
++ Merged SSO implementations (Oauth2) [#649](https://github.com/tobychui/zoraxy/pull/649)
++ Merged forward-auth optimization [#692(https://github.com/tobychui/zoraxy/pull/692)
++ Optimized SSO UI
++ Refactored docker image workflows by [PassiveLemon](https://github.com/tobychui/zoraxy/commits?author=PassiveLemon)
++ Added disable chunked transfer encoding checkbox (for upstreams that uses legacy HTTP implementations)
++ Bug fixes [#694](https://github.com/tobychui/zoraxy/issues/694), [#659](https://github.com/tobychui/zoraxy/issues/659) by [jemmy1794](https://github.com/tobychui/zoraxy/commits?author=jemmy1794), [#695](https://github.com/tobychui/zoraxy/issues/695)
+
+# v3.1.9 1 Mar 2025
+
++ Fixed netstat underflow bug
++ Fixed origin picker cookie bug [#550](https://github.com/tobychui/zoraxy/issues/550)
++ Added prototype plugin system
++ Added plugin examples
++ Added notice for build-in Zerotier network controller deprecation (and will be moved to plugins)
++ Added country code display for quickban list [#247](https://github.com/tobychui/zoraxy/issues/247)
++ Removed passive load balancer and default to active lb only [#554](https://github.com/tobychui/zoraxy/issues/554)
+
+
+# v3.1.8 16 Feb 2025
+
++ Exposed timeout value from dpcore to UI
++ Added active load balancing (if uptime monitor is enabled on that rule)
++ Re-factorized io stats and remove dependencies over wmic by [eyerrock](https://github.com/eyerrock)
++ Removed SMTP input validation [#497](https://github.com/tobychui/zoraxy/issues/497)
++ Fixed sticky session bug
++ Fixed passive load balancer bug
++ Fixed dockerfile bug by [PassiveLemon](https://github.com/PassiveLemon)
+
+# v3.1.7 08 Feb 2025
+
++ Merged and added new tagging system for HTTP Proxy rules [by @adoolaard](https://github.com/adoolaard)
++ Added inline editing for redirection rules [#510](https://github.com/tobychui/zoraxy/issues/510)
++ Added uptime monitor status dot detail info (now clickable) [#467](https://github.com/tobychui/zoraxy/issues/467)
++ Added close connection support to port 80 listener [#405](https://github.com/tobychui/zoraxy/issues/450)
++ Optimized port collision check on startup
++ Optimized dark theme color scheme (Free consultation by 3S Design studio)
++ Fixed capital letter rule unable to delete bug [#507](https://github.com/tobychui/zoraxy/issues/507)
++ Fixed docker statistic not save bug [by @PassiveLemon](https://github.com/PassiveLemon) [#505](https://github.com/tobychui/zoraxy/issues/505)
+
+
+# v3.1.6 31 Dec 2024
+
+
++ Exposed log file, sys.uuid and static web server path to start flag (customizable conf and sys.db path is still wip)
++ Optimized connection close implementation
++ Added toggle for uptime monitor
++ Added optional copy HTTP custom headers to websocket connection [#444](https://github.com/tobychui/zoraxy/issues/444)
+
+# v3.1.5 28 Dec 2024
+
++ Fixed hostname case sensitive bug [#435](https://github.com/tobychui/zoraxy/issues/435)
++ Fixed ACME table too wide css bug [#422](https://github.com/tobychui/zoraxy/issues/422)
++ Fixed HSTS toggle button bug [#415](https://github.com/tobychui/zoraxy/issues/415)
++ Fixed slow GeoIP resolve mode concurrent r/w bug [#401](https://github.com/tobychui/zoraxy/issues/401)
++ Added close connection as default site option [#430](https://github.com/tobychui/zoraxy/issues/430)
++ Added experimental authelia support [#384](https://github.com/tobychui/zoraxy/issues/384)
++ Added custom header support to websocket [#426](https://github.com/tobychui/zoraxy/issues/426)
++ Added levelDB as database implementation (not currently used)
++ Added external GeoIP db loading support
++ Restructured a lot of modules
+
+# v3.1.4 24 Nov 2024
+
++ **Added Dark Theme Mode** [#390](https://github.com/tobychui/zoraxy/issues/390) [#82](https://github.com/tobychui/zoraxy/issues/82)
++ Added an auto sniffer for self-signed certificates
++ Added robots.txt to the project
++ Introduced an EU wrapper in the front-end for automatic registration of 26 countries [#378](https://github.com/tobychui/zoraxy/issues/378)
++ Moved all hard-coded values to a dedicated def.go file
++ Fixed a panic issue occurring on unsupported platform exits
++ Integrated fixes for SSH proxy and Docker snippet updates [#330](https://github.com/tobychui/zoraxy/issues/330) [#348](https://github.com/tobychui/zoraxy/issues/348)
++ **Changed the default listening port to 443 and enable TLS by default**
++ Optimized GeoIP database slow-search mode CPU usage
+
+
+# v3.1.3 12 Nov 2024
+
++ Fixed a critical security bug [CVE-2024-52010](https://github.com/advisories/GHSA-7hpf-g48v-hw3j)
+
+# v3.1.2 03 Nov 2024
+
++ Added auto start port 80 listener on acme certificate generator
++ Added polling interval and propagation timeout option in ACME module [#300](https://github.com/tobychui/zoraxy/issues/300)
++ Added support for custom header variables [#318](https://github.com/tobychui/zoraxy/issues/318)
++ Added support for X-Remote-User 
++ Added port scanner [#342](https://github.com/tobychui/zoraxy/issues/342)
++ Optimized code base for stream proxy and config file storage [#320](https://github.com/tobychui/zoraxy/issues/320)
++ Removed sorting on cert list
++ Fixed request certificate button bug 
++ Fixed cert auto renew logic [#316](https://github.com/tobychui/zoraxy/issues/316)
++ Fixed unable to remove new stream proxy bug
++ Fixed many other minor bugs  [#328](https://github.com/tobychui/zoraxy/issues/328) [#297](https://github.com/tobychui/zoraxy/issues/297)
++ Added more code to SSO system (disabled in release)
+
+
+# v3.1.1. 09 Sep 2024
+
++ Updated country name in access list [#287](https://github.com/tobychui/zoraxy/issues/287)
++ Added tour for basic operations
++ Updated acme log to system wide logger implementation
++ Fixed path traversal in file manager [#274](https://github.com/tobychui/zoraxy/issues/274)
++ Removed Proxmox debug code
++ Fixed trie tree implementations
+
+**Thanks to all contributors**
+
++ Fix existing containers list in docker popup [7brend7](https://github.com/tobychui/zoraxy/issues?q=is%3Apr+author%3A7brend7)
++ Fix network I/O chart not rendering [JokerQyou](https://github.com/tobychui/zoraxy/issues?q=is%3Apr+author%3AJokerQyou)
++ Fix typo remvoeClass to removeClass [Aahmadsyamim](https://github.com/tobychui/zoraxy/issues?q=is%3Apr+author%3Aahmadsyamim)
++ Updated weighted random upstream implementation [bouroo](https://github.com/tobychui/zoraxy/issues?q=is%3Apr+author%3Abouroo)
+
+# v3.1.0 31 Jul 2024
+
++ Updated log viewer with filter and auto refresh [#243](https://github.com/tobychui/zoraxy/issues/243)
++ Fixed csrf vulnerability [#267](https://github.com/tobychui/zoraxy/issues/267)
++ Fixed promox issue
++ Fixed status code bug in upstream log [#254](https://github.com/tobychui/zoraxy/issues/254)
++ Added host overwrite and hop-by-hop header remover
++ Added early renew days settings [#256](https://github.com/tobychui/zoraxy/issues/256)
++ Updated make file to force no CGO in cicd process
++ Fixed bug in updater
++ Fixed wildcard certificate renew bug [#249](https://github.com/tobychui/zoraxy/issues/249)
++ Added certificate download function [#227](https://github.com/tobychui/zoraxy/issues/227)
+
+# v3.0.9 16 Jul 2024
+
++ Added certificate download [#227](https://github.com/tobychui/zoraxy/issues/227)
++ Updated netcup timeout value [#231](https://github.com/tobychui/zoraxy/issues/231)
++ Updated geoip db
++ Removed debug print from log viewer
++ Upgraded netstat log printing to new log formatter
++ Improved update module implementation
+
+# v3.0.8 15 Jul 2024
+
++ Added apache style logging mechanism (and build-in log viewer) [#218](https://github.com/tobychui/zoraxy/issues/218)
++ Fixed keep alive flushing issues [#235](https://github.com/tobychui/zoraxy/issues/235)
++ Added multi-upstream supports [#100](https://github.com/tobychui/zoraxy/issues/100)
++ Added stick session load balancer
++ Added weighted random load balancer
++ Added domain cleaning logic to domain / IP input fields
++ Added HSTS "include subdomain" auto injector
++ Added work-in-progress SSO / Oauth Server UI
++ Fixed uptime monitor not updating on proxy rule change bug
++ Optimized UI for create new proxy rule
++ Removed service expose proxy feature
+
+# v3.0.7 20 Jun 2024
+
++ Fixed redirection enable bug [#199](https://github.com/tobychui/zoraxy/issues/199)
++ Fixed header tool user agent rewrite sequence
++ Optimized rate limit UI
++ Added HSTS and Permission Policy Editor [#163](https://github.com/tobychui/zoraxy/issues/163)
++ Docker UX optimization start parameter `-docker`
++ Docker container selector implementation for conditional compilations for Windows
+
+From contributors:
+
++ Add Rate Limits Limits to Zoraxy fixes [185](https://github.com/tobychui/zoraxy/issues/185) by [Kirari04](https://github.com/Kirari04)
++ Add docker containers list to set rule by [7brend7](https://github.com/7brend7) [PR202](https://github.com/tobychui/zoraxy/pull/202)
+
 # v3.0.6 10 Jun 2024
 
 + Added fastly_client_ip to X-Real-IP auto rewrite
@@ -13,6 +356,9 @@
 + Added stream proxy auto start [#169](https://github.com/tobychui/zoraxy/issues/169)
 + Optimized UX for reminding user to click Apply after port change
 + Added version number to footer [#160](https://github.com/tobychui/zoraxy/issues/160)
+
+From contributors:
+
 + Fixed missing / unnecessary error check [PR187](https://github.com/tobychui/zoraxy/pull/187) by [Kirari04](https://github.com/Kirari04)
 
 # v3.0.5 May 26 2024

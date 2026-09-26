@@ -36,6 +36,9 @@ func mergeDailySummaryExports(exports []*statistic.DailySummaryExport) *statisti
 		Referer:         make(map[string]int),
 		UserAgent:       make(map[string]int),
 		RequestURL:      make(map[string]int),
+		RequestMethods:  make(map[string]int),
+		Downstreams:     make(map[string]int),
+		Upstreams:       make(map[string]int),
 	}
 
 	for _, export := range exports {
@@ -65,6 +68,18 @@ func mergeDailySummaryExports(exports []*statistic.DailySummaryExport) *statisti
 
 		for key, value := range export.RequestURL {
 			mergedExport.RequestURL[key] += value
+		}
+
+		for key, value := range export.RequestMethods {
+			mergedExport.RequestMethods[key] += value
+		}
+
+		for key, value := range export.Downstreams {
+			mergedExport.Downstreams[key] += value
+		}
+
+		for key, value := range export.Upstreams {
+			mergedExport.Upstreams[key] += value
 		}
 	}
 

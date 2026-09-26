@@ -5,8 +5,10 @@
     </div>
     <div class="ui top attached tabular menu">
         <a class="utils item active" data-tab="utiltab1"><i class="ui user circle blue icon"></i> Accounts</a>
-        <a class="utils item" data-tab="utiltab2">Toolbox</a>
-        <a class="utils item" data-tab="utiltab3">System</a>
+        <a class="utils item" data-tab="utiltab2"><i class="ui grey file alternate outline icon"></i> Logger</a>
+        <a class="utils item" data-tab="utiltab3">Toolbox</a>
+        <a class="utils item" data-tab="utiltab4">System</a>
+        <a class="utils item" data-tab="utiltab5"><i class="heart red icon"></i> Contributors</a>
     </div>
 
     <div class="ui bottom attached tab segment utilitiesTabs active" data-tab="utiltab1">
@@ -40,54 +42,64 @@
                     <i class="ui circle checkmark green icon "></i> Password Updated
                 </div>
             </div>
-            <div class="ui divider"></div>
-            <h3>Forget Password Email</h3>
-            <p>The following SMTP settings help you to reset your password in case you have lost your management account.</p>
-            <form id="email-form" class="ui form">
-                <div class="field">
-                    <label>Sender Address</label>
-                    <input type="text" name="senderAddr" placeholder="E.g. noreply@zoraxy.arozos.com">
-                </div>
-                <div class="field">
-                    <p><i class="caret down icon"></i> Connection setup for email service provider</p>
-                    <div class="fields">
-                        <div class="twelve wide field">
-                            <label>SMTP Provider Hostname</label>
-                            <input type="text" name="hostname" placeholder="E.g. mail.gandi.net">
-                        </div>
-            
-                        <div class="four wide field">
-                            <label>Port</label>
-                            <input type="number" name="port" placeholder="E.g. 587" value="587">
-                        </div>
-                    </div>
-                </div>
-    
-                <div class="field">
-                    <p><i class="caret down icon"></i> Credentials for SMTP server authentications</p>
-                    <div class="field">
-                        <label>Sender Username / Email</label>
-                        <input type="text" name="username" placeholder="e.g. admin or admin@mydomain.com">
-                    </div>
-                </div>
-                <div class="field">
-                    <label>Sender Password</label>
-                    <input type="password" name="password" placeholder="Password of the email account">
-                    <small>Leave empty to use the old password</small>
-                </div>
-               
-                <p> <i class="caret down icon"></i> Email for sending account reset link</p>
-                <div class="field">
-                    <label>Admin / Receiver Address</label>
-                    <input type="text" name="recvAddr" placeholder="E.g. personalEmail@gmail.com">
-                </div>
-                
-                <button class="ui basic button" type="submit"><i class="blue save icon"></i> Set SMTP Configs</button>
-                <button class="ui basic button" onclick="event.preventDefault(); sendTestEmail(this);"><i class="teal mail icon"></i> Send Test Email</button>
-            </form>
-        </div>
+     </div>
     </div>
     <div class="ui bottom attached tab segment utilitiesTabs" data-tab="utiltab2">
+        <!-- Log Settings -->
+        <h3>Log Settings</h3>
+        <p>Configure log rotation settings for the system logger</p>
+        <div class="ui basic segment">
+            <form id="log-settings-form" class="ui form">
+                <div class="field">
+                    <div class="ui toggle checkbox">
+                        <input type="checkbox" id="logRotationEnabled" name="enabled">
+                        <label>Enable Log Rotation</label>
+                    </div>
+                </div>
+                <div class="field">
+                    <label>Maximum Log File Size</label>
+                    <div class="ui right labeled input">
+                        <input type="text" id="logMaxSize" name="maxSize" placeholder="e.g. 200M, 10K, 500" value="0">
+                        <div class="ui basic label">bytes</div>
+                    </div>
+                    <small>Enter size with suffix (K, M, G) or plain number. Set to 0 to disable.</small>
+                </div>
+                <div class="field">
+                    <label>Maximum Backup Files</label>
+                    <input type="number" id="logMaxBackups" name="maxBackups" placeholder="10" min="1" value="16">
+                    <small>Maximum number of rotated log files to keep.</small>
+                </div>
+                <div class="field">
+                    <div class="ui checkbox">
+                        <input type="checkbox" id="logCompressionEnabled" name="compress">
+                        <label>Enable Log Compression</label>
+                    </div>
+                    <br>
+                    <small>When enabled, rotated log files will be compressed using ZIP format.</small>
+                </div>
+                <button class="ui basic button" type="submit">
+                    <i class="green save icon"></i> Save Settings
+                </button>
+                <button class="ui basic button" id="rotateLogBtn" onclick="triggerLogRotation(event)">
+                    <i class="yellow archive icon" ></i> Rotate Log Now
+                </button>
+                <div id="logSettingsSuccessMsg" class="ui green message" style="display:none;">
+                    <i class="checkmark icon"></i> Log settings updated successfully
+                </div>
+                <div id="logSettingsErrorMsg" class="ui red message" style="display:none;">
+                    <i class="exclamation triangle icon"></i> <span id="logSettingsErrorText"></span>
+                </div>
+            </form>
+        </div>
+        <div class="ui divider"></div>
+
+        <!-- Log Viewer -->
+        <h3>System Log Viewer</h3>
+        <p>View and download Zoraxy log</p>
+        <a class="ui basic button" href="snippet/logview.html" target="_blank"><i class="ui blue file icon"></i> Open Log Viewer</a>
+        <div class="ui divider"></div>
+    </div>
+    <div class="ui bottom attached tab segment utilitiesTabs" data-tab="utiltab3">
         <h3> IP Address to CIDR</h3>
         <p>No experience with CIDR notations? Here are some tools you can use to make setting up easier.</p>
         <div class="ui basic segment">
@@ -115,14 +127,90 @@
             <p>Results: <div id="ipRangeOutput">N/A</div></p>
         </div>
         <div class="ui divider"></div>
+        <h3>Geo-IP Lookup</h3>
+        <p>Enter an IP address and see its estimated geographical location and access control rule results.</p>
+        <div class="ui basic segment">
+            <div class="ui action input" style="width: 100%; max-width: 420px;">
+                <input type="text" id="geoipInput" placeholder="IPv4 or IPv6 address (e.g. 1.1.1.1)">
+                <button class="ui basic blue button" onclick="lookupGeoIp()"><i class="search icon"></i> Lookup</button>
+            </div>
+            <div id="geoipResult" style="display:none; margin-top: 1em;">
+                <div class="ui small label" style="margin-bottom: 1em;">
+                    <i class="globe icon"></i> Country ISO Code: <span id="geoipCountryCode" class="detail">-</span>
+                </div>
+                <h5>Access Rule Check</h5>
+                <p style="color: grey; font-size: 0.9em;">Shows whether this IP would be permitted by each configured access rule.</p>
+                <table class="ui very basic celled table" id="geoipRuleTable">
+                    <thead>
+                        <tr>
+                            <th>Rule UUID</th>
+                            <th>Rule Name</th>
+                            <th>Access</th>
+                        </tr>
+                    </thead>
+                    <tbody id="geoipRuleTableBody">
+                    </tbody>
+                </table>
+            </div>
+            <div id="geoipError" class="ui red message" style="display:none;"></div>
+        </div>
     </div>
-    <div class="ui bottom attached tab segment utilitiesTabs" data-tab="utiltab3">
+    <div class="ui bottom attached tab segment utilitiesTabs" data-tab="utiltab4">
+        <!-- Geo-IP Database Update -->
+        <h3>Geo-IP Database Update</h3>
+        <p>The Geo-IP database resolves visitor IP addresses into country codes for access control rules and statistics. Updating it keeps the country lookup results accurate.</p>
+        <div class="ui basic segment">
+            <table class="ui very basic collapsing celled table">
+                <tbody>
+                    <tr>
+                        <td>Database Source</td>
+                        <td id="geodbSource">-</td>
+                    </tr>
+                    <tr>
+                        <td>Database Date</td>
+                        <td id="geodbDate">-</td>
+                    </tr>
+                    <tr>
+                        <td>Loaded Entries</td>
+                        <td id="geodbEntries">-</td>
+                    </tr>
+                    <tr>
+                        <td>Last Updated</td>
+                        <td id="geodbLastUpdate">-</td>
+                    </tr>
+                </tbody>
+            </table>
+            <button class="ui basic button" id="geodbUpdateNowBtn" onclick="updateGeoDBNow();"><i class="ui blue download icon"></i> Update Now</button>
+            <div class="ui form" style="margin-top: 1.4em;">
+                <div class="field">
+                    <div class="ui toggle checkbox">
+                        <input type="checkbox" id="geodbAutoUpdateEnabled">
+                        <label>Enable Scheduled Update</label>
+                    </div>
+                    <br>
+                    <small>When enabled, the database is refreshed once a week counting from the time Zoraxy was started, plus a random offset of up to 30 minutes. The randomized schedule prevents all Zoraxy instances (including those started by a cron job at a fixed time) from requesting the update server at the same moment.</small>
+                </div>
+            </div>
+            <div id="geodbNextUpdate" class="ui green message" style="display:none;">
+                <i class="clock outline icon"></i> Next update in <span id="geodbCountdown">-</span>
+            </div>
+            <div id="geodbUpdateMsg" class="ui message" style="display:none;"></div>
+        </div>
+        <div class="ui divider"></div>
+
         <!-- Config Tools -->
         <h3>System Backup & Restore</h3>
         <p>Options related to system backup, migrate and restore.</p>
-        <button class="ui basic button" onclick="showSideWrapper('snippet/configTools.html');">Open Config Tools</button>
+        <button class="ui basic button" onclick="showSideWrapper('snippet/configTools.html');"><i class="ui green undo icon icon"></i> Open Config Tools</button>
         <div class="ui divider"></div>
-        <!-- System Information -->
+        
+        <!-- Statistic Reset or Export -->
+        <h3>Advanced Statistics Operations</h3>
+        <p>Export or reset the statistics collected by Zoraxy within a selected time range</p>
+        <button class="ui basic red button" onclick="handleResetAllStats();"><i class="trash icon"></i> RESET ALL STATISTICS</button>
+        <div class="ui divider"></div>
+        
+            <!-- System Information -->
         <div id="zoraxyinfo">
             <h3 class="ui header">
                 System Information
@@ -146,11 +234,6 @@
                         <td>Running Since</td>
                         <td class="boottime"></td>
                     </tr>
-                    
-                    <tr>
-                        <td>ZeroTier Linked</td>
-                        <td class="zt"></td>
-                    </tr>
                     <tr>
                         <td>Enable SSH Loopback</td>
                         <td class="sshlb"></td>
@@ -158,6 +241,25 @@
                 </tbody>
             </table>
             <p>Zoraxy is developed by tobychui for <a href="//imuslab.com" target="_blank">imuslab</a> and open source under <a href="https://www.gnu.org/licenses/agpl-3.0.txt">AGPL</a></p>
+        </div>
+    </div>
+    <div class="ui bottom attached tab segment utilitiesTabs" data-tab="utiltab5">
+        <!-- Financial Supporters -->
+        <h3><i class="heart red icon"></i> Financial Supporters</h3>
+        <p>Zoraxy is made possible by the generosity of our wonderful supporters. A huge thank you to everyone who has donated to keep this project free and open source!</p>
+        <div class="ui basic segment">
+            <div id="supportersList" class="ui">
+                <div class="ui active centered inline loader" style="margin: 2em 0;"></div>
+            </div>
+        </div>
+        <div class="ui divider"></div>
+        <!-- Privacy Notice -->
+        <div class="ui info message">
+            <i class="info circle icon"></i>
+            <strong>Privacy Notice:</strong> If you would prefer not to have your name displayed here, please open a pull request on the
+            <a href="https://github.com/tobychui/zoraxy" target="_blank">Zoraxy GitHub repository</a>
+            and edit the <code>src/web/script/supporters.txt</code> file — you may replace your name with a pseudonym or any text you like.
+            We fully respect your privacy and will merge such requests promptly.
         </div>
     </div>
     <br>
@@ -219,7 +321,6 @@
         $("#zoraxyinfo .version").text(data.Version);
         $(".zrversion").text("v." + data.Version); //index footer
         $("#zoraxyinfo .boottime").text(timeConverter(data.BootTime) + ` ( ${secondsToDhms(parseInt(Date.now()/1000) - data.BootTime)} ago)`);
-        $("#zoraxyinfo .zt").html(data.ZerotierConnected?`<i class="ui green check icon"></i> Connected`:`<i class="ui red times icon"></i> Link Error`);
         $("#zoraxyinfo .sshlb").html(data.EnableSshLoopback?`<i class="ui yellow exclamation triangle icon"></i> Enabled`:`Disabled`);
     });
 
@@ -228,7 +329,7 @@
         const newPassword = document.getElementsByName('newPassword')[0].value;
         const confirmNewPassword = document.getElementsByName('confirmNewPassword')[0].value;
         
-        $.ajax({
+        $.cjax({
             type: "POST",
             url: "/api/auth/changePassword",
             data: {
@@ -252,116 +353,217 @@
         });
     }
 
-    /*
-        SMTP Settings
-    */
-    
-    //Bind events to the form
-    $('#email-form').submit(function(e) {
-        e.preventDefault();
-        var data = {
-            hostname: $('input[name=hostname]').val(),
-            port: parseInt($('input[name=port]').val()),
-            username: $('input[name=username]').val(),
-            password: $('input[name=password]').val(),
-            senderAddr: $('input[name=senderAddr]').val(),
-            adminAddr: $('input[name=recvAddr]').val()
-        };
+    loadLogSettings();
 
-        var inputValid = validateSMTPInputs();
-        if (!inputValid){
-            msgbox("SMTP input not valid", false, 5000);
+    /*
+        Geo-IP Database Update
+    */
+    let geodbNextUpdateTime = 0;    //Unix timestamp of the next scheduled update, 0 if not scheduled
+    let geodbCountdownTimer = null; //Interval handler for the countdown ticker
+
+    //Convert a unix timestamp into a human readable time string
+    function geodbUnixToString(unixTimestamp){
+        if (unixTimestamp == undefined || unixTimestamp <= 0){
+            return "N/A";
+        }
+        return new Date(unixTimestamp * 1000).toLocaleString();
+    }
+
+    //Format the remaining seconds into "x days x hours x minutes x seconds"
+    function geodbFormatCountdown(remainingSeconds){
+        if (remainingSeconds < 0){
+            remainingSeconds = 0;
+        }
+        let d = Math.floor(remainingSeconds / 86400);
+        let h = Math.floor(remainingSeconds % 86400 / 3600);
+        let m = Math.floor(remainingSeconds % 3600 / 60);
+        let s = Math.floor(remainingSeconds % 60);
+
+        let counterText = "";
+        if (d > 0){ counterText += d + (d == 1 ? " day " : " days "); }
+        if (d > 0 || h > 0){ counterText += h + (h == 1 ? " hour " : " hours "); }
+        if (d > 0 || h > 0 || m > 0){ counterText += m + (m == 1 ? " minute " : " minutes "); }
+        counterText += s + (s == 1 ? " second" : " seconds");
+        return counterText;
+    }
+
+    function loadGeoDBUpdateStatus(){
+        $.get("/api/geodb/updateStatus", function(data){
+            if (data.error != undefined){
+                showGeoDBMessage(data.error, false);
+                return;
+            }
+
+            $("#geodbSource").html(data.usingExternalDB ?
+                `<i class="green check circle icon"></i> Downloaded database` :
+                `<i class="grey box icon"></i> Bundled database (never updated)`);
+            $("#geodbDate").text(data.usingExternalDB ? geodbUnixToString(data.databaseTime) : "Same as Zoraxy build date");
+            $("#geodbEntries").text(data.ipv4EntryCount.toLocaleString() + " IPv4 / " + data.ipv6EntryCount.toLocaleString() + " IPv6 ranges");
+            $("#geodbLastUpdate").text(geodbUnixToString(data.lastUpdateTime));
+            $("#geodbAutoUpdateEnabled").prop("checked", data.autoUpdateEnabled);
+
+            if (data.lastUpdateError != ""){
+                showGeoDBMessage("Last update failed: " + data.lastUpdateError, false);
+            }
+
+            //Start or stop the countdown depending on the scheduler state
+            geodbNextUpdateTime = data.nextUpdateTime;
+            if (data.autoUpdateEnabled && geodbNextUpdateTime > 0){
+                $("#geodbNextUpdate").show();
+                startGeoDBCountdown();
+            }else{
+                $("#geodbNextUpdate").hide();
+                stopGeoDBCountdown();
+            }
+        }).fail(function(){
+            showGeoDBMessage("Unable to load Geo-IP database status", false);
+        });
+    }
+
+    function startGeoDBCountdown(){
+        stopGeoDBCountdown();
+        renderGeoDBCountdown();
+        geodbCountdownTimer = setInterval(renderGeoDBCountdown, 1000);
+    }
+
+    function stopGeoDBCountdown(){
+        if (geodbCountdownTimer != null){
+            clearInterval(geodbCountdownTimer);
+            geodbCountdownTimer = null;
+        }
+    }
+
+    function renderGeoDBCountdown(){
+        if (geodbNextUpdateTime <= 0){
             return;
         }
 
-        $.ajax({
+        let currentTime = Math.floor(Date.now() / 1000);
+        let remainingSeconds = geodbNextUpdateTime - currentTime;
+        if (remainingSeconds <= 0){
+            //Timer is up. Poll the backend until the next update is scheduled
+            $("#geodbCountdown").text("any moment now");
+            if (currentTime % 10 == 0){
+                loadGeoDBUpdateStatus();
+            }
+            return;
+        }
+
+        $("#geodbCountdown").text(geodbFormatCountdown(remainingSeconds));
+    }
+
+    function updateGeoDBNow(){
+        let updateBtn = $("#geodbUpdateNowBtn");
+        let originalBtnText = updateBtn.html();
+        updateBtn.html('<i class="spinner loading icon"></i> Updating...').addClass("loading disabled");
+
+        $.cjax({
             type: "POST",
-            url: "/api/tools/smtp/set",
-            data: data,
-            success: function(data) {
-               if (data.error != undefined){
-                    msgbox(data.error, false, 5000);
-               }else{
-                    msgbox("SMTP Account Updated")
-               }
+            url: "/api/geodb/updateNow",
+            success: function(data){
+                if (data.error != undefined){
+                    showGeoDBMessage("Update failed: " + data.error, false);
+                }else{
+                    showGeoDBMessage("Geo-IP database updated and reloaded", true);
+                }
+                loadGeoDBUpdateStatus();
             },
-            error: function(xhr, status, error) {
-                msgbox(xhr.responseText, false, 5000);
+            error: function(xhr, status, error){
+                showGeoDBMessage("Update failed: " + error, false);
+            },
+            complete: function(){
+                updateBtn.html(originalBtnText).removeClass("loading disabled");
             }
         });
+    }
+
+    function setGeoDBAutoUpdate(enabled){
+        $.cjax({
+            type: "POST",
+            url: "/api/geodb/autoUpdate",
+            data: {enable: enabled},
+            success: function(data){
+                if (data.error != undefined){
+                    showGeoDBMessage(data.error, false);
+                    //Revert the toggle to the actual state
+                }else{
+                    showGeoDBMessage(enabled ? "Scheduled update enabled" : "Scheduled update disabled", true);
+                }
+                loadGeoDBUpdateStatus();
+            },
+            error: function(xhr, status, error){
+                showGeoDBMessage("Unable to update setting: " + error, false);
+                loadGeoDBUpdateStatus();
+            }
+        });
+    }
+
+    function showGeoDBMessage(message, isSuccess){
+        $("#geodbUpdateMsg").removeClass("green red")
+            .addClass(isSuccess ? "green" : "red")
+            .html(`<i class="${isSuccess ? "check circle" : "exclamation triangle"} icon"></i> ` + $("<span>").text(message).html())
+            .stop().finish().slideDown("fast").delay(isSuccess ? 3000 : 8000).slideUp("fast");
+    }
+
+    //Bind the change event on the input element instead of using the checkbox
+    //module onChange, as the checkbox modules are re-initialized further below
+    $("#geodbAutoUpdateEnabled").on("change", function(){
+        setGeoDBAutoUpdate($(this).is(":checked"));
     });
 
-    function initSMTPSettings(){
-        $.get("/api/tools/smtp/get", function(data){
-            $('#email-form input[name=hostname]').val(data.Hostname);
-            $('#email-form input[name=port]').val(data.Port);
-            $('#email-form input[name=username]').val(data.Username);
-            $('#email-form input[name=senderAddr]').val(data.SenderAddr);
-        });
+    loadGeoDBUpdateStatus();
 
-        $.get("/api/tools/smtp/admin", function(data){
-            $('#email-form input[name=recvAddr]').val(data);
-        });
-    }
-    initSMTPSettings();
+    /*
+        Geo-IP Lookup & Access Rule Check
+    */
+    function lookupGeoIp() {
+        const ip = document.getElementById('geoipInput').value.trim();
+        if (!ip) {
+            document.getElementById('geoipError').textContent = 'Please enter an IP address.';
+            document.getElementById('geoipError').style.display = 'block';
+            document.getElementById('geoipResult').style.display = 'none';
+            return;
+        }
+        document.getElementById('geoipError').style.display = 'none';
+        document.getElementById('geoipResult').style.display = 'none';
 
-    function sendTestEmail(btn){
-        $(btn).addClass("loading").addClass("disabled");
-        $.get("/api/tools/smtp/test", function(data){
-            if (data.error !== undefined){
-                msgbox(data.error, false, 5000);
-            }else{
-                msgbox("Test Email Sent")
+        $.get('/api/info/ipcheck', { ip: ip }, function(data) {
+            if (data.error) {
+                document.getElementById('geoipError').textContent = data.error;
+                document.getElementById('geoipError').style.display = 'block';
+                return;
             }
-            $(btn).removeClass("loading").removeClass("disabled");
-        })
+            const countryCode = data.countryIsoCode || '(unknown)';
+            document.getElementById('geoipCountryCode').textContent = countryCode;
+
+            const tbody = document.getElementById('geoipRuleTableBody');
+            tbody.innerHTML = '';
+            (data.rules || []).forEach(function(rule) {
+                const icon = rule.allowed
+                    ? '<i class="green check circle icon"></i> Allow'
+                    : '<i class="red times circle icon"></i> Deny';
+                tbody.innerHTML += `<tr>
+                    <td style="font-family: monospace; font-size: 0.85em;">${rule.id}</td>
+                    <td>${rule.name}</td>
+                    <td>${icon}</td>
+                </tr>`;
+            });
+            if ((data.rules || []).length === 0) {
+                tbody.innerHTML = '<tr><td colspan="3">No access rules configured.</td></tr>';
+            }
+            document.getElementById('geoipResult').style.display = 'block';
+        }).fail(function(xhr) {
+            let msg = 'Lookup failed.';
+            try { msg = JSON.parse(xhr.responseText).error || msg; } catch(e) {}
+            document.getElementById('geoipError').textContent = msg;
+            document.getElementById('geoipError').style.display = 'block';
+        });
     }
 
-    function validateSMTPInputs() {
-        let isValid = true;
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/; // email regex pattern
-        const domainRegex = /^([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,}$/i; // domain/subdomain regex pattern
-        const form = $('#email-form');
-
-        // validate hostname
-        const hostname = form.find('input[name="hostname"]').val().trim();
-        if (!domainRegex.test(hostname)) {
-            form.find('input[name="hostname"]').parent().addClass('error');
-            isValid = false;
-        } else {
-            form.find('input[name="hostname"]').parent().removeClass('error');
-        }
-
-
-        // validate username
-        const username = form.find('input[name="username"]').val().trim();
-        if (username === '') {
-            form.find('input[name="username"]').parent().addClass('error');
-            isValid = false;
-        } else {
-            form.find('input[name="username"]').parent().removeClass('error');
-        }
-
-        // validate sender address
-        const senderAddr = form.find('input[name="senderAddr"]').val().trim();
-        if (!emailRegex.test(senderAddr)) {
-            form.find('input[name="senderAddr"]').parent().addClass('error');
-            isValid = false;
-        } else {
-            form.find('input[name="senderAddr"]').parent().removeClass('error');
-        }
-
-        // validate receiver address
-        const recvAddr = form.find('input[name="recvAddr"]').val().trim();
-        if (!emailRegex.test(recvAddr)) {
-            form.find('input[name="recvAddr"]').parent().addClass('error');
-            isValid = false;
-        } else {
-            form.find('input[name="recvAddr"]').parent().removeClass('error');
-        }
-
-        return isValid;
-    }
+    // Allow pressing Enter in the IP input to trigger lookup
+    document.getElementById('geoipInput').addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') lookupGeoIp();
+    });
 
     /*
         IP Address Utilities
@@ -469,4 +671,169 @@
         }
         return [ip >>> 24 & 0xFF, ip >>> 16 & 0xFF, ip >>> 8 & 0xFF, ip & 0xFF].join('.')
     }
-</script>
+
+    /*
+        Log Settings
+    */
+    function loadLogSettings() {
+        $.get("/api/logger/config", function(data) {
+            if (data.error) {
+                console.error("Failed to load log settings:", data.error);
+                return;
+            }
+            $("#logRotationEnabled").prop("checked", data.enabled);
+            $("#logMaxSize").val(data.maxSize);
+            $("#logMaxBackups").val(data.maxBackups || 16);
+            $("#logCompressionEnabled").prop("checked", data.compress);
+            // Re-initialize checkboxes after setting values
+            $('.ui.checkbox').checkbox();
+        }).fail(function(xhr, status, error) {
+            console.error("Failed to load log settings:", error);
+        });
+    }
+
+    function saveLogSettings() {
+        const settings = {
+            enabled: $("#logRotationEnabled").is(":checked"),
+            maxSize: $("#logMaxSize").val().trim(),
+            maxBackups: parseInt($("#logMaxBackups").val()) || 16,
+            compress: $("#logCompressionEnabled").is(":checked")
+        };
+
+        // Validate maxSize format
+        const maxSizeRegex = /^\d+[KMG]?$/i;
+        if (!maxSizeRegex.test(settings.maxSize)) {
+            showLogSettingsError("Max size must be a number optionally followed by K, M, or G (e.g., 200M, 10K, 500)");
+            return;
+        }
+
+        // Basic validation
+        if (settings.maxSize === "") {
+            showLogSettingsError("Max size cannot be empty");
+            return;
+        }
+
+        if (settings.maxBackups < 1) {
+            showLogSettingsError("Max backups must be at least 1");
+            return;
+        }
+
+        $.cjax({
+            type: "POST",
+            url: "/api/logger/config",
+            data: JSON.stringify(settings),
+            success: function(data) {
+                if (data.error) {
+                    showLogSettingsError(data.error);
+                } else {
+                    showLogSettingsSuccess();
+                }
+            },
+            error: function(xhr, status, error) {
+                showLogSettingsError("Failed to save settings: " + error);
+            }
+        });
+    }
+
+    function showLogSettingsSuccess() {
+        $("#logSettingsErrorMsg").hide();
+        $("#logSettingsSuccessMsg").stop().finish().slideDown("fast").delay(3000).slideUp("fast");
+    }
+
+    function showLogSettingsError(message) {
+        $("#logSettingsSuccessMsg").hide();
+        $("#logSettingsErrorText").text(message);
+        $("#logSettingsErrorMsg").stop().finish().slideDown("fast").delay(5000).slideUp("fast");
+    }
+
+    function triggerLogRotation(event) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        // Show loading state on button
+        const rotateBtn = $('#rotateLogBtn');
+        const originalText = rotateBtn.html();
+        rotateBtn.html('<i class="spinner loading icon"></i> Rotating...').addClass('loading disabled');
+
+        $.get("/api/log/rotate/trigger", function(data) {
+            if (data.error) {
+                showLogSettingsError("Failed to rotate log: " + data.error);
+            } else {
+                showLogSettingsSuccess();
+                // Update success message for rotation
+                $("#logSettingsSuccessMsg").html('<i class="archive icon"></i> Log rotation triggered successfully').stop().finish().slideDown("fast").delay(3000).slideUp("fast");
+            }
+        }).fail(function(xhr, status, error) {
+            showLogSettingsError("Failed to rotate log: " + error);
+        }).always(function() {
+            // Restore button state
+            rotateBtn.html(originalText).removeClass('loading disabled');
+        });
+    }
+
+    // Initialize Semantic UI checkboxes
+    $('.ui.checkbox').checkbox();
+
+    // Bind form submission
+    $("#log-settings-form").submit(function(e) {
+        e.preventDefault();
+        saveLogSettings();
+    });
+
+    /*
+        Statistics Operations
+    */
+    function handleResetAllStats(){
+        if (confirm("Confirm remove ALL statistics from the system? This action is irreversible.")){
+            $.cjax({
+                url: "/api/analytic/resetAll",
+                method: "POST",
+                success: function(data){
+                    if (data.error != undefined){
+                        msgbox(data.error, false, 5000);
+                    }else{
+                        msgbox("All Statistics Cleared");
+                    }
+                }
+            })
+        }
+    }
+
+    /*
+        Financial Supporters
+    */
+    function loadSupporters() {
+        $.get("/script/supporters.txt", function(raw) {
+            var names = [];
+            raw.split("\n").forEach(function(line) {
+                var trimmed = line.trim();
+                if (trimmed && trimmed[0] !== '#') {
+                    names.push(trimmed);
+                }
+            });
+
+            var container = $("#supportersList");
+            container.empty();
+
+            if (names.length === 0) {
+                container.html('<p style="color: grey;">No supporters listed yet.</p>');
+                return;
+            }
+
+            var html = '<div style="display: flex; flex-wrap: wrap; gap: 0.6em; padding: 0.5em 0;">';
+            names.forEach(function(name) {
+                html += '<div class="ui black label" style="font-size: 1em; padding: 0.6em 1em;">'
+                    + '<i class="heart red icon" style="color: #db2828 !important; background-color: transparent !important;"></i>'
+                    + $('<span>').text(name).html()
+                    + '</div>';
+            });
+            html += '</div>';
+            html += '<p style="margin-top: 1.2em; color: grey; font-size: 0.9em;">'
+                + names.length + ' generous supporter' + (names.length !== 1 ? 's' : '') + ' and counting &mdash; thank you!'
+                + '</p>';
+            container.html(html);
+        }).fail(function() {
+            $("#supportersList").html('<p style="color: grey;">Unable to load supporters list.</p>');
+        });
+    }
+
+    loadSupporters();

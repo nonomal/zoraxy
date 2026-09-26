@@ -25,15 +25,27 @@ func (s *AccessRule) AllowConnectionAccess(conn net.Conn) bool {
 	return true
 }
 
-// Toggle black list
+// Toggle blacklist
 func (s *AccessRule) ToggleBlacklist(enabled bool) {
 	s.BlacklistEnabled = enabled
 	s.SaveChanges()
 }
 
-// Toggel white list
+// Toggel whitelist
 func (s *AccessRule) ToggleWhitelist(enabled bool) {
 	s.WhitelistEnabled = enabled
+	s.SaveChanges()
+}
+
+// Toggle whitelist loopback
+func (s *AccessRule) ToggleAllowLoopback(enabled bool) {
+	s.WhitelistAllowLocalAndLoopback = enabled
+	s.SaveChanges()
+}
+
+// Toggle trust proxy headers only
+func (s *AccessRule) ToggleTrustProxy(enabled bool) {
+	s.TrustProxyHeadersOnly = enabled
 	s.SaveChanges()
 }
 

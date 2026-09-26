@@ -3,7 +3,7 @@ package acme
 /*
 	CA.go
 
-	This script load CA defination from embedded ca.json
+	This script load CA definition from embedded ca.json
 */
 import (
 	_ "embed"
@@ -13,7 +13,7 @@ import (
 	"strings"
 )
 
-// CA Defination, load from embeded json when startup
+// CA definition, load from embeded json when startup
 type CaDef struct {
 	Production map[string]string
 	Test       map[string]string
@@ -36,13 +36,17 @@ func init() {
 }
 
 // Get the CA ACME server endpoint and error if not found
-func loadCAApiServerFromName(caName string) (string, error) {
+func loadCAApiServerFromName(caName string, acmeTestMode bool) (string, error) {
 	// handle BuyPass cert org section (Buypass AS-983163327)
 	if strings.HasPrefix(caName, "Buypass AS") {
 		caName = "Buypass"
 	}
 
 	val, ok := caDef.Production[caName]
+	if acmeTestMode {
+		val, ok = caDef.Test[caName]
+	}
+
 	if !ok {
 		return "", errors.New("This CA is not supported")
 	}
@@ -50,7 +54,7 @@ func loadCAApiServerFromName(caName string) (string, error) {
 	return val, nil
 }
 
-func IsSupportedCA(caName string) bool {
-	_, err := loadCAApiServerFromName(caName)
+func IsSupportedCA(caName string, acmeTestMode bool) bool {
+	_, err := loadCAApiServerFromName(caName, acmeTestMode)
 	return err == nil
 }

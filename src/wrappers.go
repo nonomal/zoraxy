@@ -18,14 +18,12 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"imuslab.com/zoraxy/mod/dynamicproxy"
-	"imuslab.com/zoraxy/mod/ipscan"
+	"imuslab.com/zoraxy/mod/dynamicproxy/loadbalance"
 	"imuslab.com/zoraxy/mod/mdns"
 	"imuslab.com/zoraxy/mod/uptime"
 	"imuslab.com/zoraxy/mod/utils"
@@ -33,41 +31,85 @@ import (
 )
 
 /*
-	Proxy Utils
-*/
-//Check if site support TLS
-func HandleCheckSiteSupportTLS(w http.ResponseWriter, r *http.Request) {
-	targetURL, err := utils.PostPara(r, "url")
-	if err != nil {
-		utils.SendErrorResponse(w, "invalid url given")
-		return
-	}
-
-	httpsUrl := fmt.Sprintf("https://%s", targetURL)
-	httpUrl := fmt.Sprintf("http://%s", targetURL)
-
-	client := http.Client{Timeout: 5 * time.Second}
-
-	resp, err := client.Head(httpsUrl)
-	if err == nil && resp.StatusCode == http.StatusOK {
-		js, _ := json.Marshal("https")
-		utils.SendJSONResponse(w, string(js))
-		return
-	}
-
-	resp, err = client.Head(httpUrl)
-	if err == nil && resp.StatusCode == http.StatusOK {
-		js, _ := json.Marshal("http")
-		utils.SendJSONResponse(w, string(js))
-		return
-	}
-
-	utils.SendErrorResponse(w, "invalid url given")
-}
-
-/*
 	Statistic Summary
 */
+
+// TrafficMapUpstream represents an upstream node for the traffic flow diagram
+type TrafficMapUpstream struct {
+	Origin       string `json:"origin"`
+	RequireTLS   bool   `json:"requireTLS"`
+	RequestCount int    `json:"requestCount"`
+	Weight       int    `json:"weight"`
+	Inactive     bool   `json:"inactive"`
+}
+
+// TrafficMapProxy represents a proxy rule node for the traffic flow diagram
+type TrafficMapProxy struct {
+	Domain       string               `json:"domain"`
+	Disabled     bool                 `json:"disabled"`
+	RequestCount int                  `json:"requestCount"`
+	Upstreams    []*TrafficMapUpstream `json:"upstreams"`
+}
+
+// TrafficMapData is the top-level payload for the traffic flow diagram
+type TrafficMapData struct {
+	Proxies       []*TrafficMapProxy `json:"proxies"`
+	TotalRequests int64              `json:"totalRequests"`
+}
+
+// HandleTrafficMapData returns all proxy rules with per-rule and per-upstream
+// traffic counts for today, used by the traffic flow diagram.
+func HandleTrafficMapData(w http.ResponseWriter, r *http.Request) {
+	result := TrafficMapData{
+		Proxies:       []*TrafficMapProxy{},
+		TotalRequests: statisticCollector.DailySummary.TotalRequest,
+	}
+
+	// Helper to look up today's request count for a given key
+	lookupCount := func(m interface{ Load(key interface{}) (interface{}, bool) }, key string) int {
+		if v, ok := m.Load(key); ok {
+			if count, ok := v.(int); ok {
+				return count
+			}
+		}
+		return 0
+	}
+
+	dynamicProxyRouter.ProxyEndpoints.Range(func(_, value interface{}) bool {
+		ep := value.(*dynamicproxy.ProxyEndpoint)
+		proxyNode := &TrafficMapProxy{
+			Domain:       ep.RootOrMatchingDomain,
+			Disabled:     ep.Disabled,
+			RequestCount: lookupCount(statisticCollector.DailySummary.DownstreamHostnames, ep.RootOrMatchingDomain),
+			Upstreams:    []*TrafficMapUpstream{},
+		}
+
+		for _, upstream := range ep.ActiveOrigins {
+			proxyNode.Upstreams = append(proxyNode.Upstreams, &TrafficMapUpstream{
+				Origin:       upstream.OriginIpOrDomain,
+				RequireTLS:   upstream.RequireTLS,
+				RequestCount: lookupCount(statisticCollector.DailySummary.UpstreamHostnames, upstream.OriginIpOrDomain),
+				Weight:       upstream.Weight,
+				Inactive:     false,
+			})
+		}
+		for _, upstream := range ep.InactiveOrigins {
+			proxyNode.Upstreams = append(proxyNode.Upstreams, &TrafficMapUpstream{
+				Origin:       upstream.OriginIpOrDomain,
+				RequireTLS:   upstream.RequireTLS,
+				RequestCount: lookupCount(statisticCollector.DailySummary.UpstreamHostnames, upstream.OriginIpOrDomain),
+				Weight:       upstream.Weight,
+				Inactive:     true,
+			})
+		}
+
+		result.Proxies = append(result.Proxies, proxyNode)
+		return true
+	})
+
+	js, _ := json.Marshal(result)
+	utils.SendJSONResponse(w, string(js))
+}
 
 // Handle conversion of statistic daily summary to country summary
 func HandleCountryDistrSummary(w http.ResponseWriter, r *http.Request) {
@@ -109,12 +151,13 @@ func HandleCountryDistrSummary(w http.ResponseWriter, r *http.Request) {
 // See https://github.com/tobychui/zoraxy/issues/77
 func UpdateUptimeMonitorTargets() {
 	if uptimeMonitor != nil {
-		uptimeMonitor.Config.Targets = GetUptimeTargetsFromReverseProxyRules(dynamicProxyRouter)
+		uptimeMonitor.SetTargets(GetUptimeTargetsFromReverseProxyRules(dynamicProxyRouter))
+		uptimeMonitor.CleanRecords()
 		go func() {
 			uptimeMonitor.ExecuteUptimeCheck()
 		}()
 
-		SystemWideLogger.PrintAndLog("Uptime", "Uptime monitor config updated", nil)
+		SystemWideLogger.PrintAndLog("uptime-monitor", "Uptime monitor config updated", nil)
 	}
 }
 
@@ -124,37 +167,54 @@ func GetUptimeTargetsFromReverseProxyRules(dp *dynamicproxy.Router) []*uptime.Ta
 
 	UptimeTargets := []*uptime.Target{}
 	for hostid, target := range hosts {
-		url := "http://" + target.Domain
-		protocol := "http"
-		if target.RequireTLS {
-			url = "https://" + target.Domain
-			protocol = "https"
+		if target.Disabled || target.DisableUptimeMonitor {
+			//Skip those proxy rules that is disabled
+			continue
 		}
-
-		//Add the root url
-		UptimeTargets = append(UptimeTargets, &uptime.Target{
-			ID:       hostid,
-			Name:     hostid,
-			URL:      url,
-			Protocol: protocol,
-		})
-
-		//Add each virtual directory into the list
-		for _, vdir := range target.VirtualDirectories {
-			url := "http://" + vdir.Domain
+		isMultipleUpstreams := len(target.ActiveOrigins) > 1
+		for i, origin := range target.ActiveOrigins {
+			url := "http://" + origin.OriginIpOrDomain
 			protocol := "http"
-			if target.RequireTLS {
-				url = "https://" + vdir.Domain
+			if origin.RequireTLS {
+				url = "https://" + origin.OriginIpOrDomain
 				protocol = "https"
 			}
+
 			//Add the root url
+			hostIdAndName := hostid
+			if isMultipleUpstreams {
+				hostIdAndName = hostIdAndName + " (upstream:" + strconv.Itoa(i) + ")"
+			}
 			UptimeTargets = append(UptimeTargets, &uptime.Target{
-				ID:       hostid + vdir.MatchingPath,
-				Name:     hostid + vdir.MatchingPath,
-				URL:      url,
-				Protocol: protocol,
+				ID:                hostIdAndName,
+				Name:              hostIdAndName,
+				URL:               url,
+				Protocol:          protocol,
+				ProxyType:         uptime.ProxyType_Host,
+				SkipTlsValidation: origin.SkipCertValidations,
+				HealthCheckURI:    target.UptimeMonitorURI,
 			})
 
+			//Add each virtual directory into the list
+			for _, vdir := range target.VirtualDirectories {
+				url := "http://" + vdir.Domain
+				protocol := "http"
+				if origin.RequireTLS {
+					url = "https://" + vdir.Domain
+					protocol = "https"
+				}
+				//Add the root url
+				UptimeTargets = append(UptimeTargets, &uptime.Target{
+					ID:                hostid + vdir.MatchingPath,
+					Name:              hostid + vdir.MatchingPath,
+					URL:               url,
+					Protocol:          protocol,
+					ProxyType:         uptime.ProxyType_Vdir,
+					SkipTlsValidation: origin.SkipCertValidations,
+					HealthCheckURI:    target.UptimeMonitorURI,
+				})
+
+			}
 		}
 	}
 
@@ -166,7 +226,7 @@ func HandleUptimeMonitorListing(w http.ResponseWriter, r *http.Request) {
 	if uptimeMonitor != nil {
 		uptimeMonitor.HandleUptimeLogRead(w, r)
 	} else {
-		http.Error(w, "500 - Internal Server Error", http.StatusInternalServerError)
+		http.Error(w, "500 - Internal Server Error (Still initializing)", http.StatusInternalServerError)
 		return
 	}
 }
@@ -187,7 +247,16 @@ func HandleStaticWebServerPortChange(w http.ResponseWriter, r *http.Request) {
 	if dynamicProxyRouter.Root.DefaultSiteOption == dynamicproxy.DefaultSite_InternalStaticWebServer {
 		//Update the root site as well
 		newDraftingRoot := dynamicProxyRouter.Root.Clone()
-		newDraftingRoot.Domain = "127.0.0.1:" + strconv.Itoa(newPort)
+
+		newDraftingRoot.ActiveOrigins = []*loadbalance.Upstream{
+			{
+				OriginIpOrDomain:         "127.0.0.1:" + strconv.Itoa(newPort),
+				RequireTLS:               false,
+				SkipCertValidations:      false,
+				SkipWebSocketOriginCheck: true,
+				Weight:                   0,
+			},
+		}
 		activatedNewRoot, err := dynamicProxyRouter.PrepareProxyRoute(newDraftingRoot)
 		if err != nil {
 			utils.SendErrorResponse(w, "unable to update root routing rule")
@@ -241,44 +310,6 @@ func HandleMdnsScanning(w http.ResponseWriter, r *http.Request) {
 
 	js, _ := json.Marshal(hosts)
 	utils.SendJSONResponse(w, string(js))
-}
-
-// handle ip scanning
-func HandleIpScan(w http.ResponseWriter, r *http.Request) {
-	cidr, err := utils.PostPara(r, "cidr")
-	if err != nil {
-		//Ip range mode
-		start, err := utils.PostPara(r, "start")
-		if err != nil {
-			utils.SendErrorResponse(w, "missing start ip")
-			return
-		}
-
-		end, err := utils.PostPara(r, "end")
-		if err != nil {
-			utils.SendErrorResponse(w, "missing end ip")
-			return
-		}
-
-		discoveredHosts, err := ipscan.ScanIpRange(start, end)
-		if err != nil {
-			utils.SendErrorResponse(w, err.Error())
-			return
-		}
-
-		js, _ := json.Marshal(discoveredHosts)
-		utils.SendJSONResponse(w, string(js))
-	} else {
-		//CIDR mode
-		discoveredHosts, err := ipscan.ScanCIDRRange(cidr)
-		if err != nil {
-			utils.SendErrorResponse(w, err.Error())
-			return
-		}
-
-		js, _ := json.Marshal(discoveredHosts)
-		utils.SendJSONResponse(w, string(js))
-	}
 }
 
 /*
@@ -382,13 +413,22 @@ func HandleZoraxyInfo(w http.ResponseWriter, r *http.Request) {
 		ZerotierConnected bool
 	}
 
+	displayUUID := nodeUUID
+	displayAllowSSHLB := *allowSshLoopback
+	displayBootTime := bootTime
+
+	if !authAgent.CheckAuth(r) {
+		displayUUID = "Unauthorized"
+		displayAllowSSHLB = false
+		displayBootTime = 0
+	}
+
 	info := ZoraxyInfo{
-		Version:           version,
-		NodeUUID:          nodeUUID,
-		Development:       development,
-		BootTime:          bootTime,
-		EnableSshLoopback: *allowSshLoopback,
-		ZerotierConnected: ganManager.ControllerID != "",
+		Version:           SYSTEM_VERSION,
+		NodeUUID:          displayUUID,
+		Development:       *development_build,
+		BootTime:          displayBootTime,
+		EnableSshLoopback: displayAllowSSHLB,
 	}
 
 	js, _ := json.MarshalIndent(info, "", " ")
@@ -409,5 +449,52 @@ func HandleGeoIpLookup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	js, _ := json.Marshal(cc)
+	utils.SendJSONResponse(w, string(js))
+}
+
+// HandleIpAccessCheck resolves the GeoIP country code for the given IP and
+// evaluates every access rule to report whether the IP would be permitted.
+func HandleIpAccessCheck(w http.ResponseWriter, r *http.Request) {
+	ip, err := utils.GetPara(r, "ip")
+	if err != nil {
+		utils.SendErrorResponse(w, "ip not given")
+		return
+	}
+
+	// Resolve country code
+	cc, err := geodbStore.ResolveCountryCodeFromIP(ip)
+	if err != nil {
+		utils.SendErrorResponse(w, err.Error())
+		return
+	}
+
+	// Evaluate each access rule
+	type RuleResult struct {
+		ID      string `json:"id"`
+		Name    string `json:"name"`
+		Allowed bool   `json:"allowed"`
+	}
+
+	type Result struct {
+		CountryIsoCode string       `json:"countryIsoCode"`
+		Rules          []RuleResult `json:"rules"`
+	}
+
+	allRules := accessController.ListAllAccessRules()
+	ruleResults := make([]RuleResult, 0, len(allRules))
+	for _, rule := range allRules {
+		ruleResults = append(ruleResults, RuleResult{
+			ID:      rule.ID,
+			Name:    rule.Name,
+			Allowed: rule.AllowIpAccess(ip),
+		})
+	}
+
+	result := Result{
+		CountryIsoCode: cc.CountryIsoCode,
+		Rules:          ruleResults,
+	}
+
+	js, _ := json.Marshal(result)
 	utils.SendJSONResponse(w, string(js))
 }

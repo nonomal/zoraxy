@@ -1,5 +1,5 @@
 # PLATFORMS := darwin/amd64 darwin/arm64 freebsd/amd64 linux/386 linux/amd64 linux/arm linux/arm64 linux/mipsle windows/386 windows/amd64 windows/arm windows/arm64
-PLATFORMS := linux/amd64 linux/386 linux/arm linux/arm64 linux/mipsle linux/riscv64 windows/amd64
+PLATFORMS := linux/amd64 linux/386 linux/arm linux/arm64 linux/mipsle linux/riscv64 windows/amd64 freebsd/amd64 darwin/amd64
 temp = $(subst /, ,$@)
 os = $(word 1, $(temp))
 arch = $(word 2, $(temp))
@@ -19,7 +19,7 @@ clean:
 
 $(PLATFORMS):
 	@echo "Building $(os)/$(arch)"
-	GOROOT_FINAL=Git/ GOOS=$(os) GOARCH=$(arch) $(if $(filter linux/arm,$(os)/$(arch)),GOARM=6,) go build -o './dist/zoraxy_$(os)_$(arch)'  -ldflags "-s -w" -trimpath
+	GOROOT_FINAL=Git/ GOOS=$(os) GOARCH=$(arch) $(if $(filter linux/arm,$(os)/$(arch)),GOARM=6,) CGO_ENABLED="0" go build -o './dist/zoraxy_$(os)_$(arch)'  -ldflags "-s -w" -trimpath
 #	GOROOT_FINAL=Git/ GOOS=$(os) GOARCH=$(arch) GOARM=6 go build -o './dist/zoraxy_$(os)_$(arch)'  -ldflags "-s -w" -trimpath
 
 

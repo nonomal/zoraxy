@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <!-- Notes: This should be open in its original path-->
+        <meta charset="utf-8">
+        <meta name="zoraxy.csrf.Token" content="{{.csrfToken}}">
+        <title>Plugin Store</title>
+        <link rel="stylesheet" href="../script/semantic/semantic.min.css">
+        <script src="../script/jquery-3.6.0.min.js"></script>
+        <script src="../script/semantic/semantic.min.js"></script>
+        <script src="../script/utils.js"></script>
+        <style>
+            #pluginList{
+                padding: 1em;
+                border: 1px solid #ccc;
+                height: 500px;
+                overflow-y: scroll;
+            }
+
+            body.darkTheme #pluginList .header{
+                color: #fff;
+            }
+
+            .installablePlugin{
+                position: relative;
+            }
+            .installablePlugin .action{
+                position: absolute;
+                top: 0.4em;
+                right: 0.4em;
+            }
+
+            /* Dark theme support for modal */
+            body.darkTheme .ui.modal {
+                background-color: #1b1c1d;
+                color: rgba(255, 255, 255, 0.9);
+            }
+
+            body.darkTheme .ui.modal > .header {
+                background-color: #1b1c1d;
+                color: rgba(255, 255, 255, 0.9);
+                border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            }
+
+            body.darkTheme .ui.modal > .content {
+                background-color: #1b1c1d;
+            }
+
+            body.darkTheme .ui.modal .table {
+                background-color: #1b1c1d;
+                color: rgba(255, 255, 255, 0.9);
+            }
+
+            body.darkTheme .ui.modal .table td {
+                border-color: rgba(255, 255, 255, 0.1);
+            }
+
+            body.darkTheme .ui.modal .actions {
+                background-color: #1b1c1d;
+                border-top: 1px solid rgba(255, 255, 255, 0.1);
+            }
+
+            body.darkTheme .ui.modal a{
+                color: #2185d0;
+            }
+
+            @media screen and (max-width: 768px) {
+                #pluginList .item .image {
+                    display: none;
+                }
+            }
+        </style>
+    </head>
+    <body>
+        <link rel="stylesheet" href="../darktheme.css">
+        <script src="../script/darktheme.js"></script>
+        <br>
+        <div class="ui container">
+            <div class="ui fluid search">
+                <div class="ui fluid icon input">
+                    <input id="searchInput" class="prompt" type="text" placeholder="Search plugins">
+                    <i class="search icon"></i>
+                </div>
+            </div>
+            <div class="ui divided items" id="pluginList">
+               
+            </div>
+            <button class="ui basic button" onclick="forceResyncPlugins();"><i class="ui green refresh icon"></i> Update Plugin List</button>
+            <!-- <div class="ui divider"></div>
+                <div class="ui basic segment advanceoptions">
+                    <div class="ui accordion advanceSettings">
+                        <div class="title">
+                        <i class="dropdown icon"></i>
+                            Advance Settings
+                        </div>
+                        <div class="content">
+                            <p>Plugin Store URLs</p>
+                            <div class="ui form">
+                            <div class="field">
+                                <textarea id="pluginStoreURLs" rows="5"></textarea>
+                                <label>Enter plugin store URLs, separating each URL with a new line</label>
+                            </div>
+                            <button class="ui basic button" onclick="savePluginStoreURLs()">
+                                <i class="ui green save icon"></i>Save
+                            </button>
+                            </div>
+                            
+                        </div>
+                    </div>
+                </div>
+            -->
+            <div class="ui divider"></div>
+            <div class="field" >
+                <button class="ui basic button"  style="float: right;" onclick="closeThisWrapper();">Close</button>
+            </div>
+            <br><br><br><br>
+        </div>
+        
+        <!-- Plugin Info Modal -->
+        <div class="ui modal" id="pluginInfoModal">
+            <i class="close icon"></i>
+            <div class="header">
+                Plugin Information
+            </div>
+            <div class="content">
+                <table class="ui celled table">
+                    <tbody id="pluginInfoTable">
+                    </tbody>
+                </table>
+            </div>
+            <div class="actions">
+                <button class="ui button" onclick="$('#pluginInfoModal').modal('hide');">Close</button>
+            </div>
+        </div>
+        
+        <script>
+            let availablePlugins = [];
+            let installedPlugins = [];
+            $(".accordion").accordion();
+
+            function initStoreList(){
+                $.get("/api/plugins/list", function(data) {
+                    if (data.error != undefined) {
+                        parent.msgbox(data.error, false);
+                        return;
+                    }else{
+                        installedPlugins = data || [];
+                        console.log(installedPlugins);
+                    }
+
+                    $.cjax({
+                        url: '/api/plugins/store/list',
+                        type: 'GET',
+                        success: function(data) {
+                            if (data.error != undefined) {
+                                parent.msgbox(data.error, false);
+                            }else{
+                                availablePlugins = data || [];
+                                populatePluginList(availablePlugins);
+                            }
+                        }
+                    });
+                });
+            }
+            initStoreList();
+
+            /* Plugin Search */
+            function searchPlugins() {
+                const query = document.getElementById('searchInput').value.toLowerCase();
+                const items = document.querySelectorAll('#pluginList .item');
+                if (query.trim() === '') {
+                    items.forEach(item => {
+                        item.style.display = '';
+                    });
+                    return;
+                }
+                items.forEach(item => {
+                    const name = item.querySelector('.header').textContent.toLowerCase();
+                    const description = item.querySelector('.description p').textContent.toLowerCase();
+                    const authorElement = item.querySelector('.plugin_author');
+                    const author = authorElement ? authorElement.textContent.toLowerCase() : '';
+                    const id = item.getAttribute('plugin_id').toLowerCase();
+
+                    if (name.includes(query) || description.includes(query) || author.includes(query) || id.includes(query)) {
+                        item.style.display = '';
+                    } else {
+                        item.style.display = 'none';
+                    }
+                });
+            }
+
+            //Bind search function to input field and Enter key
+            document.getElementById('searchInput').addEventListener('input', searchPlugins);
+            document.getElementById('searchInput').addEventListener('keydown', function(event) {
+                if (event.key === 'Enter') {
+                    searchPlugins();
+                }
+            });
+
+            function forceResyncPlugins() {
+                parent.msgbox("Updating plugin list...", true);
+                document.getElementById('searchInput').value = '';
+                $.cjax({
+                    url: '/api/plugins/store/resync',
+                    type: 'POST',
+                    success: function(data) {
+                        if (data.error != undefined) {
+                            parent.msgbox(data.error, false);
+                        } else {
+                            parent.msgbox("Plugin list updated successfully", true);
+                            initStoreList();
+                        }
+                    }
+                });
+            }
+
+            /* Plugin Store */
+            function populatePluginList(plugins) {
+                const pluginList = document.getElementById('pluginList');
+                pluginList.innerHTML = ''; // Clear existing items
+                plugins.forEach(plugin => {
+                    console.log(plugin);
+                    let thisPluginIsInstalled = false;
+                    installedPlugins.forEach(installedPlugin => {
+                        if (installedPlugin.Spec.id == plugin.PluginIntroSpect.id) {
+                            thisPluginIsInstalled = true;
+                        }
+                    });
+                    const item = `
+                        <div class="item installablePlugin" plugin_id="${plugin.PluginIntroSpect.id}">
+                            <div class="ui tiny image">
+                                <img src="${plugin.IconPath}" alt="${plugin.PluginIntroSpect.name}">
+                            </div>
+                            <div class="content">
+                                <div class="header">${plugin.PluginIntroSpect.name} </div> <a class="section" href="${plugin.PluginIntroSpect.url}" target="_blank"><i class="ui linkify icon"></i></a>
+                                <div class="meta">
+                                    <p>v${plugin.PluginIntroSpect.version_major}.${plugin.PluginIntroSpect.version_minor}.${plugin.PluginIntroSpect.version_patch} by <span class="plugin_author">${plugin.PluginIntroSpect.author}</span></p>
+                                </div>
+                                <div class="description">
+                                    <p>${plugin.PluginIntroSpect.description}</p>
+                                </div>
+                                <div class="action">
+                                    ${thisPluginIsInstalled 
+                                        ? `<button class="ui basic circular disabled button">Installed</button>` 
+                                        : `<button class="ui basic circular button" onclick="installPlugin('${plugin.PluginIntroSpect.id}', this);",><i class="ui download icon"></i> Install</button>`}
+                                        <button class="ui basic circular icon button" onclick="showPluginInfo('${plugin.PluginIntroSpect.id}');"><i class="info icon"></i></button>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                    $('#pluginList').append(item);
+                });
+
+                // Reapply search filter if there's a query in the search bar
+                const searchQuery = document.getElementById('searchInput').value.toLowerCase();
+                if (searchQuery.trim() !== '') {
+                    searchPlugins();
+                }
+                
+            }
+
+            /* Plugin Actions */
+            function installPlugin(pluginId, btn=undefined) {
+                if (btn !== undefined) {
+                    $(btn).addClass('loading').prop('disabled', true);
+                }
+                $.cjax({
+                    url: '/api/plugins/store/install',
+                    type: 'POST',
+                    data: { "pluginID": pluginId },
+                    success: function(data) {
+                        if (btn !== undefined) {
+                            $(btn).removeClass('loading').prop('disabled', false);
+                        }
+                        if (data.error != undefined) {
+                            parent.msgbox(data.error, false);
+                        } else {
+                            parent.msgbox("Plugin installed successfully", true);
+                            initStoreList();
+
+                            //Also reload the parent plugin list
+                            parent.initiatePluginList();
+                        }
+                    },
+                    error: function() {
+                        if (btn !== undefined) {
+                            $(btn).removeClass('loading').prop('disabled', false);
+                        }
+                        parent.msgbox("An error occurred while installing the plugin", false);
+                    }
+                });
+            }
+
+            function showPluginInfo(pluginId) {
+                // Find the plugin by ID
+                const plugin = availablePlugins.find(p => p.PluginIntroSpect.id === pluginId);
+                if (!plugin) {
+                    parent.msgbox("Plugin not found", false);
+                    return;
+                }
+
+                const spec = plugin.PluginIntroSpect;
+                const tableBody = $('#pluginInfoTable');
+                tableBody.empty();
+
+                // Build table rows with plugin information
+                const infoRows = [
+                    { label: 'Plugin ID', value: spec.id },
+                    { label: 'Name', value: spec.name },
+                    { label: 'Author', value: spec.author },
+                    { label: 'Author Contact', value: spec.author_contact || 'N/A' },
+                    { label: 'Description', value: spec.description },
+                    { label: 'URL', value: spec.url ? `<a href="${spec.url}" target="_blank">${spec.url}</a>` : 'N/A' },
+                    { label: 'Type', value: spec.type },
+                    { label: 'Version', value: `${spec.version_major}.${spec.version_minor}.${spec.version_patch}` },
+                    { label: 'Icon Path', value: plugin.IconPath || 'N/A' },
+                    { label: 'UI Path', value: spec.ui_path || 'N/A' },
+                    { label: 'Subscription Path', value: spec.subscription_path || 'N/A' },
+                    { label: 'Static Capture Ingress', value: spec.static_capture_ingress || 'N/A' },
+                    { label: 'Dynamic Capture Sniff', value: spec.dynamic_capture_sniff || 'N/A' },
+                    { label: 'Dynamic Capture Ingress', value: spec.dynamic_capture_ingress || 'N/A' }
+                ];
+
+                // Add static capture paths if available
+                if (spec.static_capture_paths && spec.static_capture_paths.length > 0) {
+                    infoRows.push({ 
+                        label: 'Static Capture Paths', 
+                        value: spec.static_capture_paths.join(', ') 
+                    });
+                }
+
+                // Add subscribed events if available
+                if (spec.subscriptions_events && spec.subscriptions_events.length > 0) {
+                    infoRows.push({ 
+                        label: 'Subscribed Events', 
+                        value: spec.subscriptions_events.join(', ') 
+                    });
+                }
+
+                // Add permitted API endpoints if available
+                if (spec.permitted_api_endpoints && spec.permitted_api_endpoints.length > 0) {
+                    const endpoints = spec.permitted_api_endpoints.map(ep => 
+                        `<div><strong>${ep.method}</strong> ${ep.endpoint}${ep.reason ? ` - ${ep.reason}` : ''}</div>`
+                    ).join('');
+                    infoRows.push({ 
+                        label: 'Permitted API Endpoints', 
+                        value: endpoints 
+                    });
+                }
+
+                // Add download URLs if available
+                if (plugin.DownloadURLs && Object.keys(plugin.DownloadURLs).length > 0) {
+                    const downloadLinks = Object.entries(plugin.DownloadURLs).map(([platform, url]) => 
+                        `<div><strong>${platform}:</strong> <a href="${url}" target="_blank">${url}</a></div>`
+                    ).join('');
+                    infoRows.push({ 
+                        label: 'Download URLs', 
+                        value: downloadLinks 
+                    });
+                }
+
+                // Populate the table
+                infoRows.forEach(row => {
+                    tableBody.append(`
+                        <tr>
+                            <td class="collapsing"><strong>${row.label}</strong></td>
+                            <td>${row.value}</td>
+                        </tr>
+                    `);
+                });
+
+                // Show the modal
+                $('#pluginInfoModal').modal('show');
+            }
+
+            function closeThisWrapper(){
+                parent.hideSideWrapper(true);
+            }
+
+            /* Advanced Options */                                
+            function savePluginManagerURLs() {
+                const urls = document.getElementById('pluginStoreURLs').value.split('\n').map(url => url.trim()).filter(url => url !== '');
+                console.log('Saving URLs:', urls);
+                // Add your logic to save the URLs here, e.g., send them to the server
+                $.cjax({
+                    url: '/api/plugins/store/saveURLs',
+                    type: 'POST',
+                    data: { urls },
+                    success: function(data) {
+                        if (data.error != undefined) {
+                            parent.msgbox(data.error, false);
+                        } else {
+                            parent.msgbox("URLs saved successfully", true);
+                        }
+                    }
+                });
+            }
+        </script>
+    </body>
+</html>

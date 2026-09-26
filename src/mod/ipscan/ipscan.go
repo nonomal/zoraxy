@@ -27,16 +27,16 @@ type DiscoveredHost struct {
 	HttpsPortDetected bool
 }
 
-//Scan an IP range given the start and ending ip address
+// Scan an IP range given the start and ending ip address
 func ScanIpRange(start, end string) ([]*DiscoveredHost, error) {
 	ipStart := net.ParseIP(start)
 	ipEnd := net.ParseIP(end)
 	if ipStart == nil || ipEnd == nil {
-		return nil, fmt.Errorf("Invalid IP address")
+		return nil, fmt.Errorf("invalid IP address")
 	}
 
 	if bytes.Compare(ipStart, ipEnd) > 0 {
-		return nil, fmt.Errorf("Invalid IP range")
+		return nil, fmt.Errorf("invalid IP range")
 	}
 
 	var wg sync.WaitGroup
@@ -57,7 +57,6 @@ func ScanIpRange(start, end string) ([]*DiscoveredHost, error) {
 			host.CheckHostname()
 			host.CheckPort("http", 80, &host.HttpPortDetected)
 			host.CheckPort("https", 443, &host.HttpsPortDetected)
-			fmt.Println("OK", host)
 			hosts = append(hosts, host)
 
 		}(thisIp)
@@ -109,7 +108,7 @@ func (host *DiscoveredHost) CheckPing() error {
 	pinger.Run()
 	stats := pinger.Statistics()
 	if stats.PacketsRecv == 0 {
-		return fmt.Errorf("Host unreachable for " + host.IP)
+		return fmt.Errorf("host unreachable for %s", host.IP)
 	}
 	host.Ping = int(stats.AvgRtt.Milliseconds())
 	return nil
@@ -118,7 +117,7 @@ func (host *DiscoveredHost) CheckPing() error {
 func (host *DiscoveredHost) CheckHostname() {
 	// lookup the hostname for the IP address
 	names, err := net.LookupAddr(host.IP)
-	fmt.Println(names, err)
+	//fmt.Println(names, err)
 	if err == nil && len(names) > 0 {
 		host.Hostname = names[0]
 	}
@@ -137,7 +136,7 @@ func (host *DiscoveredHost) ScanPorts(startPort, endPort int) []int {
 	var openPorts []int
 
 	for port := startPort; port <= endPort; port++ {
-		target := fmt.Sprintf("%s:%d", host.IP, port)
+		target := net.JoinHostPort(host.IP, fmt.Sprintf("%d", port))
 		conn, err := net.DialTimeout("tcp", target, time.Millisecond*500)
 		if err == nil {
 			conn.Close()

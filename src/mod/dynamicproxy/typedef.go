@@ -1,60 +1,135 @@
 package dynamicproxy
 
+/*
+	typdef.go
+
+	This script handle the type definition for dynamic proxy and endpoints
+
+	If you are looking for the default object initailization, please refer to default.go
+*/
 import (
 	_ "embed"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 
+	"github.com/quic-go/quic-go/http3"
+
+	"imuslab.com/zoraxy/mod/auth/sso/oauth2"
+	"imuslab.com/zoraxy/mod/auth/sso/zorxauth"
+
 	"imuslab.com/zoraxy/mod/access"
+	"imuslab.com/zoraxy/mod/auth/sso/forward"
+	"imuslab.com/zoraxy/mod/dynamicproxy/captcha"
 	"imuslab.com/zoraxy/mod/dynamicproxy/dpcore"
+	"imuslab.com/zoraxy/mod/dynamicproxy/exploits"
+	"imuslab.com/zoraxy/mod/dynamicproxy/loadbalance"
+	"imuslab.com/zoraxy/mod/dynamicproxy/permissionpolicy"
 	"imuslab.com/zoraxy/mod/dynamicproxy/redirection"
+	"imuslab.com/zoraxy/mod/dynamicproxy/rewrite"
 	"imuslab.com/zoraxy/mod/geodb"
+	"imuslab.com/zoraxy/mod/info/logger"
+	"imuslab.com/zoraxy/mod/plugins"
 	"imuslab.com/zoraxy/mod/statistic"
 	"imuslab.com/zoraxy/mod/tlscert"
 )
 
+type ProxyType int
+
+const PassiveLoadBalanceNotifyTimeout = 60 //Time to assume a passive load balance is unreachable, in seconds
 const (
-	ProxyType_Root = 0
-	ProxyType_Host = 1
-	ProxyType_Vdir = 2
+	ProxyTypeRoot ProxyType = iota //Root Proxy, everything not matching will be routed here
+	ProxyTypeHost                  //Host Proxy, match by host (domain) name
+	ProxyTypeVdir                  //Virtual Directory Proxy, match by path prefix
 )
 
 type ProxyHandler struct {
 	Parent *Router
 }
 
+/* Router Object Options */
 type RouterOption struct {
+	/* Basic Settings */
 	HostUUID           string //The UUID of Zoraxy, use for heading mod
 	HostVersion        string //The version of Zoraxy, use for heading mod
 	Port               int    //Incoming port
 	UseTls             bool   //Use TLS to serve incoming requsts
-	ForceTLSLatest     bool   //Force TLS1.2 or above
+	MinTLSVersion      uint16 //Minimum TLS version
 	NoCache            bool   //Force set Cache-Control: no-store
 	ListenOnPort80     bool   //Enable port 80 http listener
 	ForceHttpsRedirect bool   //Force redirection of http to https endpoint
-	TlsManager         *tlscert.Manager
-	RedirectRuleTable  *redirection.RuleTable
-	GeodbStore         *geodb.Store       //GeoIP resolver
-	AccessController   *access.Controller //Blacklist / whitelist controller
-	StatisticCollector *statistic.Collector
-	WebDirectory       string //The static web server directory containing the templates folder
+	UseProxyProtocol   bool   //Enable PROXY protocol v1/v2 support for TLS listener
+
+	/* Routing Service Managers */
+	TlsManager         *tlscert.Manager          //TLS manager for serving SAN certificates
+	RedirectRuleTable  *redirection.RuleTable    //Redirection rules handler and table
+	GeodbStore         *geodb.Store              //GeoIP resolver
+	AccessController   *access.Controller        //Blacklist / whitelist controller
+	StatisticCollector *statistic.Collector      //Statistic collector for storing stats on incoming visitors
+	WebDirectory       string                    //The static web server directory containing the templates folder
+	LoadBalancer       *loadbalance.RouteManager //Load balancer that handle load balancing of proxy target
+	PluginManager      *plugins.Manager          //Plugin manager for handling plugin routing
+
+	/* Timeouts */
+	ReadHeaderTimeout int64 //HTTP server read timeout in seconds
+	WriteTimeout      int64 //HTTP server write timeout in seconds
+	IdleTimeout       int64 //HTTP server idle timeout in seconds
+
+	/* HTTP/2 */
+	DisableHttp2                   bool   //Disable HTTP/2 on the TLS listener and serve HTTP/1.1 only
+	H2MaxConcurrentStreams         uint32 //HTTP/2 max concurrent streams per connection (0 = Go default)
+	H2MaxUploadBufferPerConnection int32  //HTTP/2 max upload buffer per connection in bytes (0 = Go default)
+	H2MaxUploadBufferPerStream     int32  //HTTP/2 max upload buffer per stream in bytes (0 = Go default)
+
+	/* HTTP/3 (QUIC) */
+	EnableH3              bool   //Enable HTTP/3 (QUIC) listener alongside HTTP/1.1+2 (requires TLS; DB-persisted, runtime-toggleable)
+	H3MaxConcurrentStreams uint32 //HTTP/3 max concurrent streams per connection (0 = quic-go default)
+
+	/* Authentication Providers */
+	ForwardAuthRouter   *forward.AuthRouter
+	OAuth2Router        *oauth2.OAuth2Router //OAuth2Router router for OAuth2Router authentication
+	ZorxAuthAgentRouter *zorxauth.AuthRouter //ZorxAuthAgent for handling zorxauth SSO authentication
+
+	/* Utilities */
+	DevelopmentMode bool           //Enable development mode, provide more debug information in headers
+	Logger          *logger.Logger //Logger for reverse proxy requests
 }
 
+/* Router Object */
 type Router struct {
 	Option         *RouterOption
-	ProxyEndpoints *sync.Map
-	Running        bool
-	Root           *ProxyEndpoint
-	mux            http.Handler
-	server         *http.Server
-	tlsListener    net.Listener
-	routingRules   []*RoutingRule
+	ProxyEndpoints *sync.Map      //Map of ProxyEndpoint objects, each ProxyEndpoint object is a routing rule that handle incoming requests
+	Running        bool           //If the router is running
+	Root           *ProxyEndpoint //Root proxy endpoint, default site
 
-	tlsRedirectStop chan bool      //Stop channel for tls redirection server
-	tldMap          map[string]int //Top level domain map, see tld.json
+	/* Internals */
+	mux          http.Handler              //HTTP handler
+	server       *http.Server              //HTTP server
+	loadBalancer *loadbalance.RouteManager //Load balancer routing manager
+	routingRules []*RoutingRule            //Special routing rules, handle high priority routing like ACME request handling
+	restarting   bool                      //If the router is restarting
+
+	h3Server *http3.Server   //HTTP/3 (QUIC) server, nil when disabled
+	h3Conn   net.PacketConn  //UDP connection serving the HTTP/3 listener; closed on shutdown
+
+	tlsListener      net.Listener //TLS listener, handle SNI routing
+	tlsBehaviorMutex sync.RWMutex //Mutex for tlsBehavior map
+	tlsRedirectStop  chan bool    //Stop channel for tls redirection server
+
+	rateLimterStop   chan bool              //Stop channel for rate limiter
+	rateLimitCounter RequestCountPerIpTable //Request counter for rate limter
+
+	captchaSessionStore *captcha.SessionStore //CAPTCHA session store for tracking verified sessions
+
+	// Secondary listening ports and their servers
+	secondaryServers     map[string]*http.Server //Map of secondary listening servers, key is the listening address (ip:port or :port)
+	secondaryStopChans   map[string]chan bool    //Stop channels for secondary listening servers
+	secondaryServerMutex sync.RWMutex            //Mutex for accessing secondary server maps
+
 }
 
+/* Basic Auth Related Data structure*/
 // Auth credential for basic auth on certain endpoints
 type BasicAuthCredentials struct {
 	Username     string
@@ -67,26 +142,33 @@ type BasicAuthUnhashedCredentials struct {
 	Password string
 }
 
-// Paths to exclude in basic auth enabled proxy handler
-type BasicAuthExceptionRule struct {
-	PathPrefix string
-}
-
-// Header injection direction type
-type HeaderDirection int
+type AuthExceptionType int
 
 const (
-	HeaderDirection_ZoraxyToUpstream   HeaderDirection = 0 //Inject (or remove) header to request out-going from Zoraxy to backend server
-	HeaderDirection_ZoraxyToDownstream HeaderDirection = 1 //Inject (or remove) header to request out-going from Zoraxy to client (e.g. browser)
+	AuthExceptionType_Paths AuthExceptionType = iota //Path exception, match by path prefix
+	AuthExceptionType_CIDR                           //CIDR exception, match by CIDR
 )
 
-// User defined headers to add into a proxy endpoint
-type UserDefinedHeader struct {
-	Direction HeaderDirection
-	Key       string
-	Value     string
-	IsRemove  bool //Instead of set, remove this key instead
+// Paths to exclude in basic auth enabled proxy handler
+type BasicAuthExceptionRule struct {
+	RuleType        AuthExceptionType //The type of the exception rule
+	PathPrefix      string            //Path prefix to match, e.g. /api/v1/
+	CaseInsensitive bool              //If true, the path prefix is matched without regard to letter case
+	CIDR            string            //CIDR to match, e.g. 192.168.1.0/24 or IP address, e.g. 192.168.1.1
+	UseTrustedProxy bool              //If true, trust proxy headers (X-Real-Ip, CF-Connecting-IP, etc.) for CIDR matching. WARNING: enabling this allows header spoofing if the upstream proxy is not trusted.
 }
+
+// ZorxAuthExceptionRule defines an exception rule for ZorxAuth SSO authentication.
+// Requests matching this rule bypass authentication entirely.
+type ZorxAuthExceptionRule struct {
+	RuleType        AuthExceptionType //The type of the exception rule (path or CIDR)
+	PathPattern     string            //Path prefix or regex pattern to match, e.g. /api/v1/ or ^/api/.*$
+	IsRegex         bool              //If true, PathPattern is treated as a regular expression; otherwise it is a path prefix
+	CIDR            string            //CIDR to match, e.g. 192.168.1.0/24 or IP address, e.g. 192.168.1.1
+	UseTrustedProxy bool              //If true, trust proxy headers (X-Real-Ip, CF-Connecting-IP, etc.) for CIDR matching. WARNING: enabling this allows header spoofing if the upstream proxy is not trusted.
+}
+
+/* Routing Rule Data Structures */
 
 // A Virtual Directory endpoint, provide a subset of ProxyEndpoint for better
 // program structure than directly using ProxyEndpoint
@@ -100,42 +182,137 @@ type VirtualDirectoryEndpoint struct {
 	parent              *ProxyEndpoint       `json:"-"`
 }
 
+// Rules and settings for header rewriting
+type HeaderRewriteRules struct {
+	UserDefinedHeaders            []*rewrite.UserDefinedHeader        //Custom headers to append when proxying requests from this endpoint
+	RequestHostOverwrite          string                              //If not empty, this domain will be used to overwrite the Host field in request header
+	HSTSMaxAge                    int64                               //HSTS max age, set to 0 for disable HSTS headers
+	EnablePermissionPolicyHeader  bool                                //Enable injection of permission policy header
+	PermissionPolicy              *permissionpolicy.PermissionsPolicy //Permission policy header
+	DisableHopByHopHeaderRemoval  bool                                //Do not remove hop-by-hop headers
+	DisableUserAgentHeaderRemoval bool                                //Do not remove User-Agent header from server response
+}
+
+/*
+
+	Authentication Provider
+
+	TODO: Move these into a dedicated module
+*/
+
+type AuthMethod int
+
+const (
+	AuthMethodNone     AuthMethod = iota //No authentication required
+	AuthMethodBasic                      //Basic Auth
+	AuthMethodForward                    //Forward
+	AuthMethodOauth2                     //Oauth2
+	AuthMethodZorxAuth                   //ZorxAuth SSO
+)
+
+type AuthenticationProvider struct {
+	AuthMethod AuthMethod //The authentication method to use
+	/* Basic Auth Settings */
+	BasicAuthCredentials    []*BasicAuthCredentials   //Basic auth credentials
+	BasicAuthExceptionRules []*BasicAuthExceptionRule //Path to exclude in a basic auth enabled proxy target
+	BasicAuthGroupIDs       []string                  //Group IDs that are allowed to access this endpoint
+
+	/* Forward Auth Settings */
+	ForwardAuthURL                    string   // Full URL of the Forward Auth endpoint. Example: https://auth.example.com/api/authz/forward-auth
+	ForwardAuthResponseHeaders        []string // List of headers to copy from the forward auth server response to the request.
+	ForwardAuthResponseClientHeaders  []string // List of headers to copy from the forward auth server response to the client response.
+	ForwardAuthRequestHeaders         []string // List of headers to copy from the original request to the auth server. If empty all are copied.
+	ForwardAuthRequestExcludedCookies []string // List of cookies to exclude from the request after sending it to the forward auth server.
+
+	/* ZorxAuth SSO Settings */
+	ZorxAuthExceptionRules []*ZorxAuthExceptionRule //Rules to bypass ZorxAuth SSO authentication (path prefix/regex or IP/CIDR)
+}
+
+/* CAPTCHA Provider Configuration */
+// Type aliases for backward compatibility
+type CaptchaProvider = captcha.Provider
+type CaptchaConfig = captcha.Config
+type CaptchaExceptionType = captcha.ExceptionType
+type CaptchaExceptionRule = captcha.ExceptionRule
+
+const (
+	CaptchaProviderCloudflare = captcha.ProviderCloudflare
+	CaptchaProviderGoogle     = captcha.ProviderGoogle
+
+	CaptchaExceptionType_Paths = captcha.ExceptionTypePaths
+	CaptchaExceptionType_CIDR  = captcha.ExceptionTypeCIDR
+)
+
 // A proxy endpoint record, a general interface for handling inbound routing
 type ProxyEndpoint struct {
-	ProxyType            int      //The type of this proxy, see const def
-	RootOrMatchingDomain string   //Matching domain for host, also act as key
-	MatchingDomainAlias  []string //A list of domains that alias to this rule
-	Domain               string   //Domain or IP to proxy to
+	ProxyType            ProxyType               //The type of this proxy, see const def
+	RootOrMatchingDomain string                  //Matching domain for host, also act as key
+	MatchingDomainAlias  []string                //A list of domains that alias to this rule
+	ActiveOrigins        []*loadbalance.Upstream //Activated Upstream or origin servers IP or domain to proxy to
+	InactiveOrigins      []*loadbalance.Upstream //Disabled Upstream or origin servers IP or domain to proxy to
+	UseStickySession     bool                    //Use stick session for load balancing
+	UseActiveLoadBalance bool                    //Use active loadbalancing, default passive
+	Disabled             bool                    //If the rule is disabled
+	ListeningPorts       []string                //Alternative listening ports in format "ip:port" or ":port" (e.g., ":8080", "192.168.1.1:8080")
 
-	//TLS/SSL Related
-	RequireTLS               bool //Target domain require TLS
-	BypassGlobalTLS          bool //Bypass global TLS setting options if TLS Listener enabled (parent.tlsListener != nil)
-	SkipCertValidations      bool //Set to true to accept self signed certs
-	SkipWebSocketOriginCheck bool //Skip origin check on websocket upgrade connections
+	//Inbound TLS/SSL Related
+	BypassGlobalTLS      bool                             //Bypass global TLS setting options if TLS Listener enabled (parent.tlsListener != nil)
+	EnableConnectSupport bool                             //Allow HTTP CONNECT tunneling to the configured upstream (disabled by default to prevent open-proxy abuse)
+	TlsOptions           *tlscert.HostSpecificTlsBehavior //TLS options for this endpoint, if nil, use global TLS options
 
 	//Virtual Directories
 	VirtualDirectories []*VirtualDirectoryEndpoint
 
+	//Generic HTTP protocol upgrade (non-WebSocket, e.g. Tailscale TS2021)
+	EnableUpgradeForwarding bool //Forward non-WebSocket Upgrade requests to the upstream (disabled by default)
+
+	//Websocket auto proxy
+	DisableWebSocket               bool  //Block all WebSocket upgrade requests with an HTTP error response
+	WebsocketTimeout               int64 //Websocket connection timeout in seconds, set to 0 for using default 300 seconds
+	EnableTimeoutRefreshOnActivity bool  //Refresh websocket connection deadline on activity, requires websocket timeout to be set
+
 	//Custom Headers
-	UserDefinedHeaders []*UserDefinedHeader //Custom headers to append when proxying requests from this endpoint
+	HeaderRewriteRules           *HeaderRewriteRules
+	EnableWebsocketCustomHeaders bool //Enable custom headers for websocket connections as well (default only http reqiests)
 
 	//Authentication
-	RequireBasicAuth        bool                      //Set to true to request basic auth before proxy
-	BasicAuthCredentials    []*BasicAuthCredentials   //Basic auth credentials
-	BasicAuthExceptionRules []*BasicAuthExceptionRule //Path to exclude in a basic auth enabled proxy target
+	AuthenticationProvider *AuthenticationProvider
+
+	// Rate Limiting
+	RequireRateLimit bool
+	RateLimit        int64 // Rate limit in requests per second
+
+	// CAPTCHA Gating
+	RequireCaptcha bool           // Enable CAPTCHA gating for this endpoint
+	CaptchaConfig  *CaptchaConfig // CAPTCHA provider configuration
+
+	//Uptime Monitor
+	DisableUptimeMonitor       bool   //Disable uptime monitor for this endpoint
+	UptimeMonitorURI           string //Optional URI path used by the uptime monitor health check (e.g. "/identity", "/healthz"). Empty = default "/"
+	DisableAutoFallback        bool   //Disable automatic fallback when uptime monitor detects an upstream is down (continue monitoring but don't auto-disable upstream)
+	DisableLogging             bool   //Disable logging of reverse proxy requests
+	DisableStatisticCollection bool   //Disable statistic collection for this endpoint
+
+	//Exploit Detection
+	BlockCommonExploits bool //Enable blocking of common exploits (SQLi, XSS, etc.)
+	BlockAICrawlers     bool //Enable blocking of AI crawlers and bots
+	MitigationAction    int  //Action to take when exploit/crawler detected (0=404, 1=403, 2=400, 3=Drop, 4=Delay, 5=Captcha)
+
+	// Chunked Transfer Encoding
+	DisableChunkedTransferEncoding bool //Disable chunked transfer encoding for this endpoint
+	ForceHTTP11                    bool //Force use HTTP/1.1 for upstream connection
 
 	//Access Control
 	AccessFilterUUID string //Access filter ID
-
-	Disabled bool //If the rule is disabled
 
 	//Fallback routing logic (Special Rule Sets Only)
 	DefaultSiteOption int    //Fallback routing logic options
 	DefaultSiteValue  string //Fallback routing target, optional
 
 	//Internal Logic Elements
-	parent *Router              `json:"-"`
-	proxy  *dpcore.ReverseProxy `json:"-"`
+	parent   *Router            `json:"-"` //Parent router, excluded from JSON
+	detector *exploits.Detector `json:"-"` //Exploit detector instance, excluded from JSON
+	Tags     []string           // Tags for the proxy endpoint
 }
 
 /*
@@ -151,6 +328,9 @@ const (
 	DefaultSite_ReverseProxy            = 1
 	DefaultSite_Redirect                = 2
 	DefaultSite_NotFoundPage            = 3
+	DefaultSite_NoResponse              = 4
+
+	DefaultSite_TeaPot = 418 //I'm a teapot
 )
 
 /*
@@ -161,4 +341,42 @@ var (
 	page_forbidden []byte
 	//go:embed templates/hosterror.html
 	page_hosterror []byte
+	//go:embed templates/rperror.html
+	page_rperror []byte
 )
+
+// ErrorTemplateType defines the type of error template to serve
+type ErrorTemplateType int
+
+const (
+	ErrorTemplateForbidden ErrorTemplateType = iota
+	ErrorTemplateHostError
+	ErrorTemplateRPError
+)
+
+// getTemplateContent returns the embedded content and filename for a given template type
+func (e ErrorTemplateType) getTemplateContent() ([]byte, string) {
+	switch e {
+	case ErrorTemplateForbidden:
+		return page_forbidden, "forbidden.html"
+	case ErrorTemplateHostError:
+		return page_hosterror, "hosterror.html"
+	case ErrorTemplateRPError:
+		return page_rperror, "rperror.html"
+	default:
+		return page_rperror, "rperror.html"
+	}
+}
+
+// isWebSocketRequest checks if the incoming HTTP request is a WebSocket upgrade request
+func isWebSocketRequest(r *http.Request) bool {
+	if r.Header == nil || r.Header["Upgrade"] == nil {
+		return false
+	}
+	upgradeHeader := r.Header["Upgrade"][0]
+	if upgradeHeader == "" {
+		return false
+	}
+
+	return strings.ToLower(upgradeHeader) == "websocket"
+}

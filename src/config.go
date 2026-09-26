@@ -14,6 +14,9 @@ import (
 	"time"
 
 	"imuslab.com/zoraxy/mod/dynamicproxy"
+	"imuslab.com/zoraxy/mod/dynamicproxy/loadbalance"
+	"imuslab.com/zoraxy/mod/info/logger"
+	"imuslab.com/zoraxy/mod/tlscert"
 	"imuslab.com/zoraxy/mod/utils"
 )
 
@@ -47,10 +50,20 @@ func LoadReverseProxyConfig(configFilepath string) error {
 	}
 
 	//Parse it into dynamic proxy endpoint
-	thisConfigEndpoint := dynamicproxy.ProxyEndpoint{}
+	thisConfigEndpoint := dynamicproxy.GetDefaultProxyEndpoint()
 	err = json.Unmarshal(endpointConfig, &thisConfigEndpoint)
 	if err != nil {
 		return err
+	}
+
+	//Make sure the tags are not nil
+	if thisConfigEndpoint.Tags == nil {
+		thisConfigEndpoint.Tags = []string{}
+	}
+
+	//Make sure the TLS options are not nil
+	if thisConfigEndpoint.TlsOptions == nil {
+		thisConfigEndpoint.TlsOptions = tlscert.GetDefaultHostSpecificTlsBehavior()
 	}
 
 	//Matching domain not set. Assume root
@@ -58,7 +71,8 @@ func LoadReverseProxyConfig(configFilepath string) error {
 		thisConfigEndpoint.RootOrMatchingDomain = "/"
 	}
 
-	if thisConfigEndpoint.ProxyType == dynamicproxy.ProxyType_Root {
+	switch thisConfigEndpoint.ProxyType {
+	case dynamicproxy.ProxyTypeRoot:
 		//This is a root config file
 		rootProxyEndpoint, err := dynamicProxyRouter.PrepareProxyRoute(&thisConfigEndpoint)
 		if err != nil {
@@ -67,7 +81,7 @@ func LoadReverseProxyConfig(configFilepath string) error {
 
 		dynamicProxyRouter.SetProxyRouteAsRoot(rootProxyEndpoint)
 
-	} else if thisConfigEndpoint.ProxyType == dynamicproxy.ProxyType_Host {
+	case dynamicproxy.ProxyTypeHost:
 		//This is a host config file
 		readyProxyEndpoint, err := dynamicProxyRouter.PrepareProxyRoute(&thisConfigEndpoint)
 		if err != nil {
@@ -75,11 +89,11 @@ func LoadReverseProxyConfig(configFilepath string) error {
 		}
 
 		dynamicProxyRouter.AddProxyRouteToRuntime(readyProxyEndpoint)
-	} else {
+	default:
 		return errors.New("not supported proxy type")
 	}
 
-	SystemWideLogger.PrintAndLog("Proxy", thisConfigEndpoint.RootOrMatchingDomain+" -> "+thisConfigEndpoint.Domain+" routing rule loaded", nil)
+	SystemWideLogger.PrintAndLog("proxy-config", thisConfigEndpoint.RootOrMatchingDomain+" -> "+loadbalance.GetUpstreamsAsString(thisConfigEndpoint.ActiveOrigins)+" routing rule loaded", nil)
 	return nil
 }
 
@@ -95,9 +109,9 @@ func filterProxyConfigFilename(filename string) string {
 
 func SaveReverseProxyConfig(endpoint *dynamicproxy.ProxyEndpoint) error {
 	//Get filename for saving
-	filename := filepath.Join("./conf/proxy/", endpoint.RootOrMatchingDomain+".config")
-	if endpoint.ProxyType == dynamicproxy.ProxyType_Root {
-		filename = "./conf/proxy/root.config"
+	filename := filepath.Join(CONF_HTTP_PROXY, endpoint.RootOrMatchingDomain+".config")
+	if endpoint.ProxyType == dynamicproxy.ProxyTypeRoot {
+		filename = filepath.Join(CONF_HTTP_PROXY, "root.config")
 	}
 
 	filename = filterProxyConfigFilename(filename)
@@ -112,9 +126,9 @@ func SaveReverseProxyConfig(endpoint *dynamicproxy.ProxyEndpoint) error {
 }
 
 func RemoveReverseProxyConfig(endpoint string) error {
-	filename := filepath.Join("./conf/proxy/", endpoint+".config")
+	filename := filepath.Join(CONF_HTTP_PROXY, endpoint+".config")
 	if endpoint == "/" {
-		filename = "./conf/proxy/root.config"
+		filename = filepath.Join(CONF_HTTP_PROXY, "/root.config")
 	}
 
 	filename = filterProxyConfigFilename(filename)
@@ -128,21 +142,23 @@ func RemoveReverseProxyConfig(endpoint string) error {
 // Get the default root config that point to the internal static web server
 // this will be used if root config is not found (new deployment / missing root.config file)
 func GetDefaultRootConfig() (*dynamicproxy.ProxyEndpoint, error) {
+	//Get the default proxy endpoint
+	rootProxyEndpointConfig := dynamicproxy.GetDefaultProxyEndpoint()
+	rootProxyEndpointConfig.ProxyType = dynamicproxy.ProxyTypeRoot
+	rootProxyEndpointConfig.RootOrMatchingDomain = "/"
+	rootProxyEndpointConfig.ActiveOrigins = []*loadbalance.Upstream{
+		{
+			OriginIpOrDomain:    "127.0.0.1:" + staticWebServer.GetListeningPort(),
+			RequireTLS:          false,
+			SkipCertValidations: false,
+			Weight:              0,
+		},
+	}
+	rootProxyEndpointConfig.DefaultSiteOption = dynamicproxy.DefaultSite_InternalStaticWebServer
+	rootProxyEndpointConfig.DefaultSiteValue = ""
+
 	//Default settings
-	rootProxyEndpoint, err := dynamicProxyRouter.PrepareProxyRoute(&dynamicproxy.ProxyEndpoint{
-		ProxyType:               dynamicproxy.ProxyType_Root,
-		RootOrMatchingDomain:    "/",
-		Domain:                  "127.0.0.1:" + staticWebServer.GetListeningPort(),
-		RequireTLS:              false,
-		BypassGlobalTLS:         false,
-		SkipCertValidations:     false,
-		VirtualDirectories:      []*dynamicproxy.VirtualDirectoryEndpoint{},
-		RequireBasicAuth:        false,
-		BasicAuthCredentials:    []*dynamicproxy.BasicAuthCredentials{},
-		BasicAuthExceptionRules: []*dynamicproxy.BasicAuthExceptionRule{},
-		DefaultSiteOption:       dynamicproxy.DefaultSite_InternalStaticWebServer,
-		DefaultSiteValue:        "",
-	})
+	rootProxyEndpoint, err := dynamicProxyRouter.PrepareProxyRoute(&rootProxyEndpointConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -155,22 +171,20 @@ func GetDefaultRootConfig() (*dynamicproxy.ProxyEndpoint, error) {
 */
 
 func ExportConfigAsZip(w http.ResponseWriter, r *http.Request) {
-	includeSysDBRaw, _ := utils.GetPara(r, "includeDB")
-	includeSysDB := false
-	if includeSysDBRaw == "true" {
-		//Include the system database in backup snapshot
-		//Temporary set it to read only
-		sysdb.ReadOnly = true
-		includeSysDB = true
-	}
+	//Include the system database in backup snapshot?
+	includeSysDB, _ := utils.GetBool(r, "includeDB")
 
 	// Specify the folder path to be zipped
-	folderPath := "./conf/"
+	if !utils.FileExists(CONF_FOLDER) {
+		SystemWideLogger.PrintAndLog("Backup", "Configuration folder not found", nil)
+		return
+	}
+	folderPath := CONF_FOLDER
 
 	// Set the Content-Type header to indicate it's a zip file
 	w.Header().Set("Content-Type", "application/zip")
-	// Set the Content-Disposition header to specify the file name
-	w.Header().Set("Content-Disposition", "attachment; filename=\"config.zip\"")
+	// Set the Content-Disposition header to specify the file name, add timestamp to the filename
+	w.Header().Set("Content-Disposition", "attachment; filename=\"zoraxy-config-"+time.Now().Format("2006-01-02-15-04-05")+".zip\"")
 
 	// Create a zip writer
 	zipWriter := zip.NewWriter(w)
@@ -220,7 +234,7 @@ func ExportConfigAsZip(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Open the file on disk
-		file, err := os.Open("sys.db")
+		file, err := os.Open(*path_database)
 		if err != nil {
 			SystemWideLogger.PrintAndLog("Backup", "Unable to open sysdb", err)
 			return
@@ -234,8 +248,6 @@ func ExportConfigAsZip(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		//Restore sysdb state
-		sysdb.ReadOnly = false
 	}
 
 	if err != nil {
@@ -268,10 +280,12 @@ func ImportConfigFromZip(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Create the target directory to unzip the files
-	targetDir := "./conf"
+	targetDir := CONF_FOLDER
 	if utils.FileExists(targetDir) {
 		//Backup the old config to old
-		os.Rename("./conf", "./conf.old_"+strconv.Itoa(int(time.Now().Unix())))
+		//backupPath := filepath.Dir(*path_conf) + filepath.Base(*path_conf) + ".old_" + strconv.Itoa(int(time.Now().Unix()))
+		//os.Rename(*path_conf, backupPath)
+		os.Rename(CONF_FOLDER, CONF_FOLDER+".old_"+strconv.Itoa(int(time.Now().Unix())))
 	}
 
 	err = os.MkdirAll(targetDir, os.ModePerm)
@@ -299,26 +313,35 @@ func ImportConfigFromZip(w http.ResponseWriter, r *http.Request) {
 		}
 		defer rc.Close()
 
-		// Create the corresponding file on disk
-		zipFile.Name = strings.ReplaceAll(zipFile.Name, "../", "")
-		fmt.Println("Restoring: " + strings.ReplaceAll(zipFile.Name, "\\", "/"))
-		if zipFile.Name == "sys.db" {
+		// Sanitize the file name to prevent path traversal (zip-slip)
+		cleanedName := filepath.Clean(filepath.FromSlash(zipFile.Name))
+		cleanedNameSlash := filepath.ToSlash(cleanedName)
+		fmt.Println("Restoring: " + cleanedNameSlash)
+		if cleanedNameSlash == "sys.db" {
 			//Sysdb replacement. Close the database and restore
 			sysdb.Close()
 			restoreDatabase = true
-		} else if !strings.HasPrefix(strings.ReplaceAll(zipFile.Name, "\\", "/"), "conf/") {
+		} else if !strings.HasPrefix(cleanedNameSlash, "conf/") {
 			//Malformed zip file.
-			http.Error(w, fmt.Sprintf("Invalid zip file structure or version too old"), http.StatusInternalServerError)
+			http.Error(w, "Invalid zip file structure or version too old", http.StatusInternalServerError)
+			return
+		}
+
+		// Resolve to absolute path and verify it stays within the target directory
+		absTargetDir, _ := filepath.Abs(targetDir)
+		absFilePath, _ := filepath.Abs(cleanedName)
+		if cleanedNameSlash != "sys.db" && !strings.HasPrefix(absFilePath, absTargetDir+string(os.PathSeparator)) {
+			http.Error(w, "Invalid file path in zip", http.StatusBadRequest)
 			return
 		}
 
 		//Check if parent dir exists
-		if !utils.FileExists(filepath.Dir(zipFile.Name)) {
-			os.MkdirAll(filepath.Dir(zipFile.Name), 0775)
+		if !utils.FileExists(filepath.Dir(cleanedName)) {
+			os.MkdirAll(filepath.Dir(cleanedName), 0775)
 		}
 
 		//Create the file
-		newFile, err := os.Create(zipFile.Name)
+		newFile, err := os.Create(cleanedName)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Failed to create file: %v", err), http.StatusInternalServerError)
 			return
@@ -347,4 +370,15 @@ func ImportConfigFromZip(w http.ResponseWriter, r *http.Request) {
 
 	}
 
+}
+
+func handleLoggerConfig(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		logger.HandleGetLogConfig(CONF_LOG_CONFIG)(w, r)
+	case http.MethodPost:
+		logger.HandleUpdateLogConfig(CONF_LOG_CONFIG, SystemWideLogger)(w, r)
+	default:
+		utils.SendErrorResponse(w, "Method not allowed")
+	}
 }

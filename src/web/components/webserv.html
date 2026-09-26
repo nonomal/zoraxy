@@ -13,34 +13,42 @@
             </div>
         </h4>
     </div>
-    
-    <h3>Web Server Settings</h3>
-    <div class="ui form">
-        <div class="inline field">
-            <div class="ui toggle checkbox webservRootDisabled">
-                <input id="webserv_enable" type="checkbox" class="hidden">
-                <label>Enable Static Web Server</label>
+    <div>
+        <h3>Web Server Settings</h3>
+        <div class="ui form">
+            <div class="inline field">
+                <div class="ui toggle checkbox webservRootDisabled">
+                    <input id="webserv_enable" type="checkbox" class="hidden">
+                    <label>Enable Static Web Server</label>
+                </div>
             </div>
-        </div>
-        <div class="inline field">
-            <div class="ui toggle checkbox">
-                <input id="webserv_enableDirList" type="checkbox" class="hidden">
-                <label>Enable Directory Listing</label>
-                <small>If this folder do not contains any index files, list the directory of this folder.</small>
+            <div class="inline field">
+                <div class="ui toggle checkbox">
+                    <input id="webserv_enableDirList" type="checkbox" class="hidden">
+                    <label>Enable Directory Listing</label>
+                    <small>If this folder do not contains any index files, list the directory of this folder.</small>
+                </div>
             </div>
-        </div>
-        <div class="field">
-            <label>Document Root Folder</label>
-            <input id="webserv_docRoot" type="text" readonly="true">
-            <small>
-                The web server root folder can only be changed via startup flags of zoraxy for security reasons. 
-                See the -webserv flag for more details.
-            </small>
-        </div>
-        <div class="field webservRootDisabled">
-            <label>Port Number</label>
-            <input id="webserv_listenPort" type="number" step="1" min="0" max="65535" value="8081" onchange="updateWebServLinkExample(this.value);">
-            <small>Use <code>http://127.0.0.1:<span class="webserv_port">8081</span></code> in proxy rules to access the web server</small>
+            <div class="inline field">
+                <div class="ui toggle checkbox">
+                    <input id="webserv_enableAllInterfaces" type="checkbox" class="hidden">
+                    <label>Listening to All Interfaces</label>
+                    <small>When disabled, the web server will only listen to localhost (127.0.0.1) and only reachable via reverse proxy rules.</small>
+                </div>
+            </div>
+            <div class="field">
+                <label>Document Root Folder</label>
+                <input id="webserv_docRoot" type="text" readonly="true">
+                <small>
+                    The web server root folder can only be changed via startup flags of zoraxy for security reasons. 
+                    See the -webserv flag for more details.
+                </small>
+            </div>
+            <div class="field webservRootDisabled">
+                <label>Port Number</label>
+                <input id="webserv_listenPort" type="number" step="1" min="0" max="65535" value="8081" onchange="updateWebServLinkExample(this.value);">
+                <small>Use <code>http://127.0.0.1:<span class="webserv_port">8081</span></code> in proxy rules to access the web server</small>
+            </div>
         </div>
     </div>
     <small><i class="ui blue save icon"></i> Changes are saved automatically</small>
@@ -74,29 +82,135 @@
     </div>
     
     <div class="ui divider"></div>
-    <div class="ui basic segment">
-        <h2>Web Directory Manager</h2>
-        <p>Manage your files inside your web directory</p>
-    </div>
-    <div class="ui basic segment" style="display:none;" id="webdirManDisabledNotice">
-        <h4 class="ui header">
-            <i class="ui red times icon"></i> 
-            <div class="content">
-                Web Directory Manager Disabled
-                <div class="sub header">Web Directory Manager has been disabled by the system administrator</div>
-            </div>
-            
-        </h4>
-    </div>
-    <iframe id="webserv_dirManager" src="tools/fs.html" style="width: 100%; height: 800px; border: 0px; overflow-y: hidden;">
-
-    </iframe>
-    <small>If you do not want to enable web access to your web directory, you can disable this feature with <code>-webfm=false</code> startup paramter</small>
    
-    
+    <div class="ui basic segment">
+        <h2>WebDAV Server</h2>
+        <p>Manage your files in the web directory using WebDAV protocol</p>
+    </div>
+    <div class="ui form">
+        <div class="ui basic segment webdavRunningStateWrapper">
+            <h4 class="ui header" id="webdavRunningState">
+                <i class="grey circle icon"></i>
+                <div class="content">
+                    <span class="webdav_status">Stopped</span>
+                    <div class="sub header">Listen port :<span class="webdav_port">5488</span></div>
+                </div>
+            </h4>
+        </div>
+        <div class="inline field">
+            <div class="ui toggle checkbox">
+                <input id="webdav_enable" type="checkbox" class="hidden">
+                <label>Enable WebDAV Server</label>
+                <small>Notes: You still need to add a proxy rule to access the WebDAV server remotely.</small>
+            </div>
+        </div>
+        <div class="field">
+            <label>WebDAV Server Port</label>
+            <input id="webdav_port" type="number" step="1" min="1" max="65535" value="5488">
+            <small>WebDAV server listens only on localhost (127.0.0.1) for security reasons.</small>
+        </div>
+        <div class="ui basic segment advanceoptions accordion" style="margin-top:0.6em;">
+            <div class="title">
+                <i class="dropdown icon"></i>
+                Advanced Options
+            </div>
+            <div class="content">
+                <div class="inline field">
+                    <div class="ui toggle checkbox">
+                        <input id="webdav_useCustomCredentials" type="checkbox" class="hidden">
+                        <label>Use Custom Credentials</label>
+                        <small>Use custom username and password for WebDAV instead of Zoraxy admin credentials.</small>
+                    </div>
+                </div>
+                <div id="webdav_customCredentialsForm">
+                    <div class="field">
+                        <label>Custom Username</label>
+                        <input id="webdav_customUsername" type="text" placeholder="Enter username (3-32 characters)">
+                    </div>
+                    <div class="field">
+                        <label>Custom Password</label>
+                        <input id="webdav_customPassword" type="password" placeholder="Enter password (minimum 8 characters)">
+                    </div>
+                    <button class="ui basic button" id="webdav_saveCustomCredentials">
+                        <i class="green save icon"></i>
+                        Save
+                    </button>
+                    <br><br>
+                    <small><i class="ui blue info circle icon"></i> Custom credentials are saved separately from other settings</small>
+                </div>
+            </div>
+        </div>
+    </div>
+    <br>
+    <small><i class="ui blue save icon"></i> Changes are saved automatically</small>
+    <br>
+    <div class="ui message">
+        <div class="ui accordion webdavhelp">
+            <div class="title">
+                <i class="dropdown icon"></i>
+                How to access the WebDAV server?
+            </div>
+            <div class="content">
+                <h4>Step 1: Add Proxy Rule</h4>
+                <p>Add a new subdomain proxy rule (e.g., <code>webdav.example.com</code>) that points to <code>http://127.0.0.1:<span class="webdav_port">5488</span></code></p>
+                
+                <h4>Step 2: Connect with WebDAV Client</h4>
+                <div class="ui list">
+                    <div class="item">
+                        <i class="windows icon"></i>
+                        <div class="content">
+                            <div class="header">Windows</div>
+                            <div class="description">
+                                Use <strong>WinSCP</strong> or map network drive:
+                                <ol>
+                                    <li>Open File Explorer</li>
+                                    <li>Right-click "This PC" → "Map network drive"</li>
+                                    <li>Enter: <code>\\webdav.example.com@SSL\</code> (or <code>http://webdav.example.com</code>)</li>
+                                    <li>Use your Zoraxy admin username and password</li>
+                                </ol>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="item">
+                        <i class="apple icon"></i>
+                        <div class="content">
+                            <div class="header">macOS</div>
+                            <div class="description">
+                                Use <strong>Finder → Go → Connect to Server</strong>:
+                                <ol>
+                                    <li>Press <kbd>Cmd</kbd>+<kbd>K</kbd></li>
+                                    <li>Enter: <code>https://webdav.example.com</code></li>
+                                    <li>Click "Connect" and enter your Zoraxy admin credentials</li>
+                                </ol>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="item">
+                        <i class="linux icon"></i>
+                        <div class="content">
+                            <div class="header">Linux</div>
+                            <div class="description">
+                                Use your file manager's "Connect to Server" feature or mount with <code>davfs2</code>:
+                                <br><code>mount -t davfs https://webdav.example.com /mnt/webdav</code>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <h4>Important Notes</h4>
+                <ul>
+                    <li>Use HTTPS (SSL/TLS) for secure connections</li>
+                    <li>Authenticate with your Zoraxy admin username and password</li>
+                    <li>The WebDAV server serves the entire <code>www/</code> folder, including both <code>html/</code> (static web files) and <code>templates/</code> (Zoraxy templates)</li>
+                </ul>
+            </div>
+        </div>
+    </div>
 
     <script>
         $(".webservhelp").accordion();
+        $(".webdavhelp").accordion();
+        $(".advanceoptions.accordion").accordion();
         $(".ui.checkbox").checkbox();
 
         function setWebServerRunningState(running){
@@ -113,12 +227,30 @@
             }
         }
 
+        function setWebDAVServerRunningState(running){
+            if (running){
+                $("#webdav_enable").parent().checkbox("set checked");
+                $("#webdavRunningState").find("i").attr("class", "white circle check icon");
+                $("#webdavRunningState").find(".webdav_status").text("Running");
+                $(".webdavRunningStateWrapper").addClass("enabled")
+            }else{
+                $("#webdav_enable").parent().checkbox("set unchecked");
+                $("#webdavRunningState").find("i").attr("class", "white circle times icon");
+                $("#webdavRunningState").find(".webdav_status").text("Stopped");
+                $(".webdavRunningStateWrapper").removeClass("enabled")
+            }
+        }
+
         function updateWebServState(){
             $.get("/api/webserv/status", function(data){
                 //Clear all event listeners
                 $("#webserv_enableDirList").off("change");
                 $("#webserv_enable").off("change");
                 $("#webserv_listenPort").off("change");
+                $("#webdav_enable").off("change");
+                $("#webdav_port").off("change");
+                $("#webdav_useCustomCredentials").off("change");
+                $("#webdav_saveCustomCredentials").off("click");
 
                 setWebServerRunningState(data.Running);
 
@@ -135,8 +267,33 @@
                     $("#webserv_dirManager").remove();
                 }
 
+                if (!data.DisableListenToAllInterface){
+                    //Options on UI is flipped
+                    $("#webserv_enableAllInterfaces").parent().checkbox("set checked");
+                }else{
+                    $("#webserv_enableAllInterfaces").parent().checkbox("set unchecked");
+                }
+
                 $("#webserv_listenPort").val(data.ListeningPort);
                 updateWebServLinkExample(data.ListeningPort);
+
+                //WebDAV settings
+                setWebDAVServerRunningState(data.EnableWebDAV);
+                
+                $("#webdav_port").val(data.WebDAVPort);
+                updateWebDAVPortExample(data.WebDAVPort);
+
+                //Custom credentials settings
+                if (data.UseCustomCredentials){
+                    $("#webdav_useCustomCredentials").parent().checkbox("set checked");
+                }else{
+                    $("#webdav_useCustomCredentials").parent().checkbox("set unchecked");
+                }
+                
+                // Set the custom username if available
+                if (data.CustomCredentialsUsername){
+                    $("#webdav_customUsername").val(data.CustomCredentialsUsername);
+                }
 
                 //Bind checkbox events
                 $("#webserv_enable").off("change").on("change", function(){
@@ -162,9 +319,34 @@
                     }
                 });
 
+                $("#webdav_enable").off("change").on("change", function(){
+                    let enable = $(this)[0].checked;
+                    if (enable){
+                        $.get("/api/webserv/webdav/start", function(data){
+                            if (data.error != undefined){
+                                msgbox(data.error, false);
+                                setWebDAVServerRunningState(false);
+                            }else{
+                                msgbox("WebDAV server started");
+                                setWebDAVServerRunningState(true);
+                            }
+                        });
+                    }else{
+                        $.get("/api/webserv/webdav/stop", function(data){
+                            if (data.error != undefined){
+                                msgbox(data.error, false);
+                                setWebDAVServerRunningState(true);
+                            }else{
+                                msgbox("WebDAV server stopped");
+                                setWebDAVServerRunningState(false);
+                            }
+                        });
+                    }
+                });
+
                 $("#webserv_enableDirList").off("change").on("change", function(){
                     let enable = $(this)[0].checked;
-                    $.ajax({
+                    $.cjax({
                         url: "/api/webserv/setDirList",
                         method: "POST",
                         data: {"enable": enable},
@@ -177,6 +359,23 @@
                         }
                     })
                 });
+
+                $("#webserv_enableAllInterfaces").off("change").on("change", function(){
+                    let disable = !$(this)[0].checked;
+                    $.cjax({
+                        url: "/api/webserv/disableListenAllInterface",
+                        method: "POST",
+                        data: {"disable": disable},
+                        success: function(data){
+                            if (data.error != undefined){
+                                msgbox(data.error, false);
+                            }else{
+                                msgbox("Listening interface setting updated");
+                            }
+                        }
+                    })
+                });
+
                 $("#webserv_listenPort").off("change").on("change", function(){
                     let newPort = $(this).val();
 
@@ -186,7 +385,7 @@
                         confirmBox("This setting might cause port conflict. Continue Anyway?", function(choice){
                             if (choice == true){
                                 //Continue anyway
-                                $.ajax({
+                                $.cjax({
                                     url: "/api/webserv/setPort",
                                     method: "POST",
                                     data: {"port": newPort},
@@ -206,7 +405,7 @@
                             }
                         });
                     }else{
-                        $.ajax({
+                        $.cjax({
                             url: "/api/webserv/setPort",
                             method: "POST",
                             data: {"port": newPort},
@@ -220,12 +419,89 @@
                         })
                     }
                 });
+
+                $("#webdav_port").off("change").on("change", function(){
+                    let newPort = $(this).val();
+                    $.cjax({
+                        url: "/api/webserv/webdav/setPort",
+                        method: "POST",
+                        data: {"port": newPort},
+                        success: function(data){
+                            if (data.error != undefined){
+                                msgbox(data.error, false);
+                            }else{
+                                msgbox("WebDAV port updated");
+                                updateWebDAVPortExample(newPort);
+                            }
+                        }
+                    })
+                });
+
+                // Custom credentials toggle
+                $("#webdav_useCustomCredentials").off("change").on("change", function(){
+                    let enable = $(this)[0].checked;
+                    $.cjax({
+                        url: "/api/webserv/webdav/setUseCustomCredentials",
+                        method: "POST",
+                        data: {"enable": enable},
+                        success: function(data){
+                            if (data.error != undefined){
+                                msgbox(data.error, false);
+                            }else{
+                                if (enable) {
+                                    msgbox("Custom credentials enabled. Please set username and password.");
+                                } else {
+                                    msgbox("Using Zoraxy admin credentials for WebDAV");
+                                }
+                            }
+                        }
+                    })
+                });
+
+                // Save custom credentials button
+                $("#webdav_saveCustomCredentials").off("click").on("click", function(){
+                    let username = $("#webdav_customUsername").val();
+                    let password = $("#webdav_customPassword").val();
+
+                    // Validate input
+                    if (!username || username.length < 3 || username.length > 32) {
+                        msgbox("Username must be between 3 and 32 characters", false);
+                        return;
+                    }
+
+                    if (!password || password.length < 8) {
+                        msgbox("Password must be at least 8 characters long", false);
+                        return;
+                    }
+
+                    $.cjax({
+                        url: "/api/webserv/webdav/setCustomCredentials",
+                        method: "POST",
+                        data: {
+                            "username": username,
+                            "password": password
+                        },
+                        success: function(data){
+                            if (data.error != undefined){
+                                msgbox(data.error, false);
+                            }else{
+                                msgbox("Custom credentials saved successfully");
+                                // Clear password field for security
+                                $("#webdav_customPassword").val("");
+                            }
+                        }
+                    })
+                });
             })
         }
         updateWebServState();
 
         function updateWebServLinkExample(newport){
             $(".webserv_port").text(newport);
+        }
+
+        function updateWebDAVPortExample(newport){
+            $(".webdav_port").text(newport);
         }
     </script>
 </div>

@@ -20,7 +20,11 @@ import (
 		- Access Router
 			- Blacklist
 			- Whitelist
+			- Exploit Detection
+		- Rate Limitor
+		- SSO Auth
 		- Basic Auth
+		- Plugin Router
 		- Vitrual Directory Proxy
 		- Subdomain Proxy
 	- Root router (default site router)
@@ -30,7 +34,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	/*
 		Special Routing Rules, bypass most of the limitations
 	*/
-	//Check if there are external routing rule matches.
+	//Check if there are external routing rule (rr) matches.
 	//If yes, route them via external rr
 	matchedRoutingRule := h.Parent.GetMatchingRoutingRule(r)
 	if matchedRoutingRule != nil {
@@ -45,7 +49,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	//Check if this is a redirection url
 	if h.Parent.Option.RedirectRuleTable.IsRedirectable(r) {
 		statusCode := h.Parent.Option.RedirectRuleTable.HandleRedirect(w, r)
-		h.logRequest(r, statusCode != 500, statusCode, "redirect", "")
+		h.Parent.logRequest(r, statusCode != 500, statusCode, "redirect", r.Host, "", nil)
 		return
 	}
 
@@ -58,7 +62,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		hostPath := strings.Split(r.Host, ":")
 		domainOnly = hostPath[0]
 	}
-	sep := h.Parent.getProxyEndpointFromHostname(domainOnly)
+	sep := h.Parent.GetProxyEndpointFromHostname(domainOnly)
 	if sep != nil && !sep.Disabled {
 		//Matching proxy rule found
 		//Access Check (blacklist / whitelist)
@@ -67,17 +71,54 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			//Use default rule
 			ruleID = "default"
 		}
-		if h.handleAccessRouting(ruleID, w, r) {
+		if h.handleAccessRouting(ruleID, w, r, sep) {
 			//Request handled by subroute
 			return
 		}
 
-		//Validate basic auth
-		if sep.RequireBasicAuth {
-			err := h.handleBasicAuthRouting(w, r, sep)
-			if err != nil {
+		/* Exploit Detection */
+		if sep.detector != nil {
+			if sep.detector.CheckIsAttack(w, r) {
+				statusCode := 403
+				if sep.detector != nil {
+					statusCode = sep.detector.GetResponseStatusCode()
+				}
+				h.Parent.logRequest(r, false, statusCode, "exploit-blocked", domainOnly, "blocked", sep)
 				return
 			}
+		}
+
+		// Rate Limit
+		if sep.RequireRateLimit {
+			err := h.handleRateLimitRouting(w, r, sep)
+			if err != nil {
+				if !sep.DisableLogging {
+					clientIP := h.Parent.GetClientIPForEndpoint(r, sep)
+					h.Parent.Option.Logger.LogHTTPRequest(r, "host", 307, r.Host, "", clientIP)
+				}
+				return
+			}
+		}
+
+		// CAPTCHA Gating
+		if handled, challenged := h.Parent.handleCaptchaGating(w, r, sep); handled {
+			if challenged {
+				h.Parent.logRequest(r, false, 403, "captcha-required", domainOnly, "captcha", sep)
+			}
+			return
+		}
+
+		//Validate auth (basic auth or SSO auth)
+		respWritten := handleAuthProviderRouting(sep, w, r, h)
+		if respWritten {
+			//Request handled by subroute
+			return
+		}
+
+		//Plugin routing
+		if h.Parent.Option.PluginManager != nil && h.Parent.Option.PluginManager.HandleRoute(w, r, sep.Tags, h.Parent.GetClientIPForEndpoint(r, sep)) {
+			//Request handled by subroute
+			return
 		}
 
 		//Check if any virtual directory rules matches
@@ -87,11 +128,15 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			//Virtual directory routing rule found. Route via vdir mode
 			h.vdirRequest(w, r, targetProxyEndpoint)
 			return
-		} else if !strings.HasSuffix(proxyingPath, "/") && sep.ProxyType != ProxyType_Root {
+		} else if !strings.HasSuffix(proxyingPath, "/") && sep.ProxyType != ProxyTypeRoot {
 			potentialProxtEndpoint := sep.GetVirtualDirectoryHandlerFromRequestURI(proxyingPath + "/")
 			if potentialProxtEndpoint != nil && !potentialProxtEndpoint.Disabled {
 				//Missing tailing slash. Redirect to target proxy endpoint
 				http.Redirect(w, r, r.RequestURI+"/", http.StatusTemporaryRedirect)
+				if !sep.DisableLogging {
+					clientIP := h.Parent.GetClientIPForEndpoint(r, sep)
+					h.Parent.Option.Logger.LogHTTPRequest(r, "redirect", 307, r.Host, "", clientIP)
+				}
 				return
 			}
 		}
@@ -106,7 +151,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	*/
 
 	//Root access control based on default rule
-	blocked := h.handleAccessRouting("default", w, r)
+	blocked := h.handleAccessRouting("default", w, r, h.Parent.Root)
 	if blocked {
 		return
 	}
@@ -131,7 +176,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 /*
 handleRootRouting
 
-This function handle root routing situations where there are no subdomain
+This function handle root routing (aka default sites) situations where there are no subdomain
 , vdir or special routing rule matches the requested URI.
 
 Once entered this routing segment, the root routing options will take over
@@ -151,7 +196,6 @@ func (h *ProxyHandler) handleRootRouting(w http.ResponseWriter, r *http.Request)
 		fallthrough
 	case DefaultSite_ReverseProxy:
 		//They both share the same behavior
-
 		//Check if any virtual directory rules matches
 		proxyingPath := strings.TrimSpace(r.RequestURI)
 		targetProxyEndpoint := proot.GetVirtualDirectoryHandlerFromRequestURI(proxyingPath)
@@ -159,7 +203,7 @@ func (h *ProxyHandler) handleRootRouting(w http.ResponseWriter, r *http.Request)
 			//Virtual directory routing rule found. Route via vdir mode
 			h.vdirRequest(w, r, targetProxyEndpoint)
 			return
-		} else if !strings.HasSuffix(proxyingPath, "/") && proot.ProxyType != ProxyType_Root {
+		} else if !strings.HasSuffix(proxyingPath, "/") && proot.ProxyType != ProxyTypeRoot {
 			potentialProxtEndpoint := proot.GetVirtualDirectoryHandlerFromRequestURI(proxyingPath + "/")
 			if potentialProxtEndpoint != nil && !targetProxyEndpoint.Disabled {
 				//Missing tailing slash. Redirect to target proxy endpoint
@@ -167,6 +211,9 @@ func (h *ProxyHandler) handleRootRouting(w http.ResponseWriter, r *http.Request)
 				return
 			}
 		}
+
+		//Do not log default site requests to avoid flooding the logs
+		//h.Parent.logRequest(r, false, 307, "root", domainOnly, "")
 
 		//No vdir match. Route via root router
 		h.hostRequest(w, r, h.Parent.Root)
@@ -176,8 +223,13 @@ func (h *ProxyHandler) handleRootRouting(w http.ResponseWriter, r *http.Request)
 			redirectTarget = "about:blank"
 		}
 
+		//Check if the default site values start with http or https
+		if !strings.HasPrefix(redirectTarget, "http://") && !strings.HasPrefix(redirectTarget, "https://") {
+			redirectTarget = "http://" + redirectTarget
+		}
+
 		//Check if it is an infinite loopback redirect
-		parsedURL, err := url.Parse(proot.DefaultSiteValue)
+		parsedURL, err := url.Parse(redirectTarget)
 		if err != nil {
 			//Error when parsing target. Send to root
 			h.hostRequest(w, r, h.Parent.Root)
@@ -185,22 +237,49 @@ func (h *ProxyHandler) handleRootRouting(w http.ResponseWriter, r *http.Request)
 		}
 		hostname := parsedURL.Hostname()
 		if hostname == domainOnly {
-			h.logRequest(r, false, 500, "root-redirect", domainOnly)
+			h.Parent.logRequest(r, false, 500, "root-redirect", domainOnly, "", h.Parent.Root)
 			http.Error(w, "Loopback redirects due to invalid settings", 500)
 			return
 		}
 
-		h.logRequest(r, false, 307, "root-redirect", domainOnly)
+		h.Parent.logRequest(r, false, 307, "root-redirect", domainOnly, "", h.Parent.Root)
 		http.Redirect(w, r, redirectTarget, http.StatusTemporaryRedirect)
 	case DefaultSite_NotFoundPage:
 		//Serve the not found page, use template if exists
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(http.StatusNotFound)
-		template, err := os.ReadFile(filepath.Join(h.Parent.Option.WebDirectory, "templates/notfound.html"))
-		if err != nil {
-			w.Write(page_hosterror)
-		} else {
-			w.Write(template)
+		h.serve404PageWithTemplate(w, r)
+	case DefaultSite_NoResponse:
+		//No response. Just close the connection
+		h.Parent.logRequest(r, false, 444, "root-no_resp", domainOnly, "", h.Parent.Root)
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			w.WriteHeader(http.StatusNoContent)
+			return
 		}
+		conn, _, err := hijacker.Hijack()
+		if err != nil {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		conn.Close()
+	case DefaultSite_TeaPot:
+		//I'm a teapot
+		h.Parent.logRequest(r, false, 418, "root-teapot", domainOnly, "", h.Parent.Root)
+		http.Error(w, "I'm a teapot", http.StatusTeapot)
+	default:
+		//Unknown routing option. Send empty response
+		h.Parent.logRequest(r, false, 544, "root-unknown", domainOnly, "", h.Parent.Root)
+		http.Error(w, "544 - No Route Defined", 544)
+	}
+}
+
+// Serve 404 page with template if exists
+func (h *ProxyHandler) serve404PageWithTemplate(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusNotFound)
+	template, err := os.ReadFile(filepath.Join(h.Parent.Option.WebDirectory, "templates/notfound.html"))
+	if err != nil {
+		w.Write(page_hosterror)
+	} else {
+		w.Write(template)
 	}
 }

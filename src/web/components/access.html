@@ -197,7 +197,7 @@
                             <div class="item" data-value="lt"><i class="lt flag"></i>Lithuania</div>
                             <div class="item" data-value="lu"><i class="lu flag"></i>Luxembourg</div>
                             <div class="item" data-value="mo"><i class="mo flag"></i>Macau</div>
-                            <div class="item" data-value="mk"><i class="mk flag"></i>Macedonia</div>
+                            <div class="item" data-value="mk"><i class="mk flag"></i>North Macedonia</div>
                             <div class="item" data-value="mg"><i class="mg flag"></i>Madagascar</div>
                             <div class="item" data-value="mw"><i class="mw flag"></i>Malawi</div>
                             <div class="item" data-value="my"><i class="my flag"></i>Malaysia</div>
@@ -330,7 +330,7 @@
                 </table>
 
                 <h4>IP Blacklist</h4>
-                <p>Black a certain IP or IP range</p>
+                <p>Block a certain IP or IP range</p>
                 <div class="ui form">
                     <div class="field">
                     <label>IP Address</label>
@@ -374,6 +374,21 @@
                 </div>
                 <div class="toggleSucc" style="float: right; display:none; color: #2abd4d;" >
                     <i class="ui green checkmark icon"></i> Setting Saved
+                </div>
+                <div class="ui basic segment advanceoptions">
+                    <div id="accessAdvanceSettings" class="ui accordion advanceSettings">
+                        <div class="title">
+                          <i class="dropdown icon"></i>
+                            Advance Settings
+                        </div>
+                        <div class="content">
+                            <div class="ui toggle checkbox">
+                                <input type="checkbox" id="enableWhitelistLoopback">
+                                <label>Enable LAN and Loopback<br>
+                                    <small>Allowing loopback request from your public IP address and local area network devices</small></label>
+                            </div>
+                        </div>
+                    </div>  
                 </div>
                 <h4>Country Whitelist</h4>
                     <p><i class="yellow exclamation triangle icon"></i>
@@ -514,7 +529,7 @@
                             <div class="item" data-value="lt"><i class="lt flag"></i>Lithuania</div>
                             <div class="item" data-value="lu"><i class="lu flag"></i>Luxembourg</div>
                             <div class="item" data-value="mo"><i class="mo flag"></i>Macau</div>
-                            <div class="item" data-value="mk"><i class="mk flag"></i>Macedonia</div>
+                            <div class="item" data-value="mk"><i class="mk flag"></i>North Macedonia</div>
                             <div class="item" data-value="mg"><i class="mg flag"></i>Madagascar</div>
                             <div class="item" data-value="mw"><i class="mw flag"></i>Malawi</div>
                             <div class="item" data-value="my"><i class="my flag"></i>Malaysia</div>
@@ -694,6 +709,7 @@
                         <tr>
                         <th>IP</th>
                         <th>Access Count</th>
+                        <th>Country of Origin</th>
                         <th>Blacklist</th>
                         </tr>
                     </thead>
@@ -719,6 +735,10 @@
     /* Access Rule Selector */
     function openAccessRuleEditor(){
         showSideWrapper('snippet/accessRuleEditor.html');
+    }
+
+    function openTrustedProxyEditor(){
+        showSideWrapper('snippet/trustedProxyEditor.html');
     }
 
     function reloadAccessRulesWithFeedback(){
@@ -818,9 +838,10 @@
     
     //Load all the black white lists
     function initBlackWhitelistTables(){
-        //Remove event listener on both toggle buttons
+        //Remove event listener on toggle buttons
         $("#enableWhitelist").off("change");
         $("#enableBlacklist").off("change");
+        $("#enableWhitelistLoopback").off("change");
 
         //Initialize the button states
         initBlacklistEnableState();
@@ -841,6 +862,25 @@
     function initBannedCountryList(){
         $.get("/api/blacklist/list?type=country&id=" + currentEditingAccessRule, function(data) {
             let bannedListHtml = '';
+
+            //Check if the country code list contains all eu countries. If yes, replace it with "EU"
+            let allEu = true;
+            let euCountries = getEUCCs();
+            for (var i = 0; i < euCountries.length; i++){
+                if (!data.includes(euCountries[i])){
+                    allEu = false;
+                    break;
+                }
+            }
+
+            if (allEu){
+                //Remove EU countries from the list and replace it with EU
+                data = data.filter(function(value, index, arr){
+                    return !euCountries.includes(value);
+                });
+                data.push("eu");
+            }
+
             data.forEach((countryCode) => {
                 bannedListHtml += `
                 <tr>
@@ -919,18 +959,48 @@
     //Whitelist country table
     function initWhitelistCountryList(){
         $.get("/api/whitelist/list?type=country&id=" + currentEditingAccessRule, function(data) {
-            let bannedListHtml = '';
+            let whiteListHTML = '';
+            
+            //Check if the country code list contains all eu countries. If yes, replace it with "EU"
+            let allEu = true;
+            let euCountries = getEUCCs();
+            let countryCodesIndata = data.map(function(item){
+                //data[n].CC is the country code 
+                return item.CC;
+            });
+            for (var i = 0; i < euCountries.length; i++){
+                if (!countryCodesIndata.includes(euCountries[i])){
+                    allEu = false;
+                    break;
+                }
+            }
+
+            if (allEu){
+                //Remove EU countries from the list and replace it with EU
+                data = data.filter(function(value, index, arr){
+                    return !euCountries.includes(value.CC);
+                });
+                data.push({
+                    CC: "eu"
+                });
+            }
+            
             data.forEach((countryWhitelistEntry) => {
                 let countryCode = countryWhitelistEntry.CC;
-                bannedListHtml += `
+                whiteListHTML += `
                 <tr>
                     <td><i class="${countryCode} flag"></i> ${getCountryName(countryCode)} (${countryCode.toUpperCase()})</td>
                     <td><button class="ui red basic mini icon button" onclick="removeFromWhiteList('${countryCode}')"><i class="trash icon"></i></button></td>
                 </tr>
                 `;
             });
-            $('#whitelistCountryList').html(bannedListHtml);
-            filterCountries(data, "#countrySelectorWhitelist .menu .item");
+            $('#whitelistCountryList').html(whiteListHTML);
+
+            //Map the data.CC to the country code
+            let countryCodes = data.map(function(item){
+                return item.CC;
+            });
+            filterCountries(countryCodes, "#countrySelectorWhitelist .menu .item");
             if (data.length === 0) {
                 $('#whitelistCountryList').append(`
                     <tr>
@@ -993,14 +1063,51 @@
                 enableWhitelist();
             })
         });
+
+        $.get("/api/whitelist/allowLocal?id=" + currentEditingAccessRule, function(data){
+            if (data == true){
+                $('#enableWhitelistLoopback').parent().checkbox("set checked");
+            }else{
+                $('#enableWhitelistLoopback').parent().checkbox("set unchecked");
+            }
+
+            //Register on change event
+            $("#enableWhitelistLoopback").off("change").on("change", function(){
+                enableWhitelistLoopback();
+            })
+        });
     }
     
+    function enableWhitelistLoopback(){
+        var isChecked = $('#enableWhitelistLoopback').is(':checked');
+        $.cjax({
+            type: 'POST',
+            url: '/api/whitelist/allowLocal',
+            data: { enable: isChecked, id: currentEditingAccessRule},
+            success: function(data){
+                if (data.error != undefined){
+                    msgbox("Failed to update loopback whitelist: " + data.error, false);
+                    //Revert the checkbox state
+                    if (isChecked){
+                        $('#enableWhitelistLoopback').parent().checkbox("set unchecked");
+                    }else{
+                        $('#enableWhitelistLoopback').parent().checkbox("set checked");
+                    }
+                    return;
+                }else{
+                    msgbox("Loopback whitelist " + (isChecked ? "enabled" : "disabled"), true);
+                }
+                
+            }
+        });
+    }
+
     /*
         Blacklist API Calls
     */
     function enableBlacklist() {
         var isChecked = $('#enableBlacklist').is(':checked');
-        $.ajax({
+        $.cjax({
             type: 'POST',
             url: '/api/blacklist/enable',
             data: { enable: isChecked, id: currentEditingAccessRule},
@@ -1016,6 +1123,10 @@
         });
     }
 
+    function getEUCCs(){
+        return ["at","be","bg","cy","cz","de","dk","ee","es","fi","fr","gr","hr","hu","ie","it","lt","lu","lv","mt","nl","pl","pt","se","si","sk"];
+    }
+
     function addCountryToBlacklist() {
         var countryCode = $("#countrySelector").dropdown("get value").toLowerCase();
         let ccs = [countryCode];
@@ -1025,48 +1136,51 @@
             ccs = countryCode.split(",");
         }
 
-        let counter = 0;
-        for(var i = 0; i < ccs.length; i++){
-            let thisCountryCode = ccs[i];
-            $.ajax({
-                type: "POST",
-                url: "/api/blacklist/country/add",
-                data: { cc: thisCountryCode, id: currentEditingAccessRule},
-                success: function(response) {
-                    if (response.error != undefined){
-                        msgbox(response.error, false);
-                    }
-                    
-                    if (counter == (ccs.length - 1)){
-                        //Last item
-                        setTimeout(function(){
-                            initBannedCountryList();
-                            if (ccs.length == 1){
-                                //Single country
-                                msgbox(`Added ${getCountryName(ccs[0])} to blacklist`);
-                            }else{
-                                msgbox(ccs.length + " countries added to blacklist");
-                            }
-                            
-                        }, (ccs.length==1)?0:100);
-                    }
-                    counter++;
-                },
-                error: function(xhr, status, error) {
-                // handle error response
-                }
+        //If the ccs includes "eu", remove the "eu" and add all eu country code to the list
+        if (ccs.includes("eu")){
+            ccs = ccs.concat(getEUCCs());
+            ccs = ccs.filter(function(item){
+                return item != "eu";
             });
         }
-        
-        
+
+        let counter = ccs.length;
+        $.cjax({
+            type: "POST",
+            url: "/api/blacklist/country/add",
+            method: "POST",
+            data: { cc: ccs.join(","), id: currentEditingAccessRule},
+            success: function(response) {
+                if (response.error != undefined){
+                    msgbox(response.error, false);
+                }
+                initBannedCountryList();
+                if (ccs.length == 1){
+                    //Single country
+                    msgbox(`Added ${getCountryName(ccs[0])} to blacklist`);
+                }else{
+                    msgbox(ccs.length + " countries added to blacklist");
+                }
+            },
+            error: function(xhr, status, error) {
+            // handle error response
+            }
+        });
         $('#countrySelector').dropdown('clear');
-        
     }
 
     function removeFromBannedList(countryCode){
-        countryCode = countryCode.toLowerCase();
         let countryName = getCountryName(countryCode);
-        $.ajax({
+        if (countryCode == "eu"){
+            let euCountries = getEUCCs();
+            countryCode = euCountries.join(",");
+            countryName = "European Union";
+        }else{
+            countryCode = countryCode.toLowerCase();
+        }
+        
+        
+        $.cjax({
             url: "/api/blacklist/country/remove",
             method: "POST",
             data: { cc: countryCode, id: currentEditingAccessRule},
@@ -1097,7 +1211,7 @@
             }
         }
 
-        $.ajax({
+        $.cjax({
             url: "/api/blacklist/ip/add",
             type: "POST",
             data: {ip: targetIp.toLowerCase(), id: currentEditingAccessRule},
@@ -1109,7 +1223,7 @@
                 }
 
                 $("#ipAddressInput").val("");
-                $("#ipAddressInput").parent().remvoeClass("error");
+                $("#ipAddressInput").parent().removeClass("error");
             },
             error: function() {
                 alert("Failed to add IP address to blacklist");
@@ -1118,8 +1232,8 @@
     }
 
     function removeIpBlacklist(ipaddr){
-        if (confirm("Confirm remove blacklist for " + ipaddr + " ?")){
-            $.ajax({
+        //if (confirm("Confirm remove blacklist for " + ipaddr + " ?")){
+            $.cjax({
                 url: "/api/blacklist/ip/remove",
                 type: "POST",
                 data: {ip: ipaddr.toLowerCase(), id: currentEditingAccessRule},
@@ -1135,7 +1249,7 @@
                 }
                 
             });
-        }
+        //}
     }
 
     /* 
@@ -1143,7 +1257,7 @@
     */
     function enableWhitelist() {
         var isChecked = $('#enableWhitelist').is(':checked');
-        $.ajax({
+        $.cjax({
             type: 'POST',
             url: '/api/whitelist/enable',
             data: { enable: isChecked , id: currentEditingAccessRule},
@@ -1161,45 +1275,54 @@
             //Usually just a few countries a for loop will get the job done
             ccs = countryCode.split(",");
         }
-    
-        let counter = 0;
-        for(var i = 0; i < ccs.length; i++){
-            let thisCountryCode = ccs[i];
-            $.ajax({
-                type: "POST",
-                url: "/api/whitelist/country/add",
-                data: { cc: thisCountryCode , id: currentEditingAccessRule},
-                success: function(response) {
-                    if (response.error != undefined){
-                        msgbox(response.error, false);
-                    }
 
-                    if (counter == (ccs.length - 1)){
-                        setTimeout(function(){
-                            initWhitelistCountryList();
-                            if (ccs.length == 1){
-                                //Single country
-                                msgbox(`Added ${getCountryName(ccs[0])} to whitelist`);
-                            }else{
-                                msgbox(ccs.length + " countries added to whitelist");
-                            }
-                        }, (ccs.length==1)?0:100);
-                    }
-                    counter++;
-                },
-                error: function(xhr, status, error) {
-                    // handle error response
-                }
+        //If the ccs includes "eu", remove the "eu" and add all eu country code to the list
+        if (ccs.includes("eu")){
+            ccs = ccs.filter(function(item){
+                return item != "eu";
             });
+            ccs = ccs.concat(getEUCCs());
         }
+
+        let counter = ccs.length;
+        $.cjax({
+            type: "POST",
+            url: "/api/whitelist/country/add",
+            data: { cc: ccs.join(",") , id: currentEditingAccessRule},
+            success: function(response) {
+                if (response.error != undefined){
+                    msgbox(response.error, false);
+                }
+
+                initWhitelistCountryList();
+                if (ccs.length == 1){
+                    //Single country
+                    msgbox(`Added ${getCountryName(ccs[0])} to whitelist`);
+                }else{
+                    msgbox(ccs.length + " countries added to whitelist");
+                }
+            },
+            error: function(xhr, status, error) {
+                // handle error response
+            }
+        });
+        
 
         $('#countrySelectorWhitelist').dropdown('clear');
     }
 
-    function removeFromWhiteList(countryCode){
-        if (confirm("Confirm removing " + getCountryName(countryCode) + " from whitelist?")){
+    //Remove from whitelist, accepts a country code or "eu" for all EU countries
+    function removeFromWhiteList(countryCode, skipConfirm = true){
+        let countryName = getCountryName(countryCode);
+        if (countryCode == "eu"){
+            let euCountries = getEUCCs();
+            countryCode = euCountries.join(",");
+            countryName = "European Union";
+        }else{
             countryCode = countryCode.toLowerCase(); 
-            $.ajax({
+        }
+        if (skipConfirm || confirm("Confirm removing " + getCountryName(countryCode) + " from whitelist?")){
+            $.cjax({
                 url: "/api/whitelist/country/remove",
                 method: "POST",
                 data: { cc: countryCode , id: currentEditingAccessRule},
@@ -1207,6 +1330,7 @@
                     if (response.error != undefined){
                         msgbox(response.error, false);
                     }
+                    msgbox(countryName + " removed from whitelist");
                     initWhitelistCountryList();
                 },
                 error: function(xhr, status, error) {
@@ -1230,7 +1354,7 @@
             }
         }
 
-        $.ajax({
+        $.cjax({
             url: "/api/whitelist/ip/add",
             type: "POST",
             data: {ip: targetIp.toLowerCase(), "comment": remarks, id: currentEditingAccessRule},
@@ -1243,7 +1367,7 @@
 
                 $("#ipAddressInputWhitelist").val("");
                 $("#ipAddressCommentsWhitelist").val("");
-                $("#ipAddressInputWhitelist").parent().remvoeClass("error");
+                $("#ipAddressInputWhitelist").parent().removeClass("error");
             },
             error: function() {
                 alert("Failed to add IP address to whitelist");
@@ -1252,8 +1376,8 @@
     }
 
     function removeIpWhitelist(ipaddr){
-        if (confirm("Confirm remove whitelist for " + ipaddr + " ?")){
-            $.ajax({
+        //if (confirm("Confirm remove whitelist for " + ipaddr + " ?")){
+            $.cjax({
                 url: "/api/whitelist/ip/remove",
                 type: "POST",
                 data: {ip: ipaddr.toLowerCase(), id: currentEditingAccessRule},
@@ -1269,25 +1393,33 @@
                 }
                 
             });
-        }
+        //}
     }
 
     /*
         Common Utilities
     */
-    function filterCountries(codesToShow, selector="#countrySelector .menu .item") {
+    function filterCountries(alreadySelectedCCs, selector="#countrySelector .menu .item") {
         // get all items in the dropdown
         const items = document.querySelectorAll(selector);
+        const euCountries = getEUCCs();
+        //Replce "eu" in alreadySelectedCCs with all EU countries
+        if (alreadySelectedCCs.includes("eu")){
+            alreadySelectedCCs = alreadySelectedCCs.filter(function(item){
+                return item != "eu";
+            });
+            alreadySelectedCCs = alreadySelectedCCs.concat(euCountries);
+        }
+        
         // loop through all items
         items.forEach(item => {
             // get the value of the item (i.e. the country code)
             const code = item.dataset.value;
-            // if the code is in the array of codes to show, show the item
-            if (codesToShow.includes(code)) {
+            if (alreadySelectedCCs.includes(code)) {
+                //This country code already selected. Hide it
                 item.style.display = 'none';
-            }
-            // otherwise, hide the item
-            else {
+            } else {
+                // otherwise, show the item
                 item.style.display = 'block';
             }
         });
@@ -1415,17 +1547,41 @@
     
     //Load the summary to ip access table
     function initBlacklistQuickBanTable(){
-        $.get("/api/stats/summary", function(data){
-            initIpAccessTable(data.RequestClientIp);
+        $.get("/api/quickban/list", function(data){
+            //Convert the data to a dictionary
+            var ipAccessCounts = {};
+            access_ip_country_map = {};
+            data.forEach(function(entry){
+               ipAccessCounts[entry.IpAddr] = entry.Count
+               access_ip_country_map[entry.IpAddr] = entry.CountryCode;
+            });
+            initIpAccessTable(ipAccessCounts);
         })
     }
     initBlacklistQuickBanTable();
 
+    function getCountryISOFromQuickBan(ip){
+        if (access_ip_country_map[ip] === "") {
+            return "LAN / Reserved";
+        }
+        return access_ip_country_map[ip];
+    }
+
     var blacklist_entriesPerPage = 30;
     var blacklist_currentPage = 1;
     var blacklist_totalPages = 0;
+    var access_ip_country_map = {};
 
     function initIpAccessTable(ipAccessCounts){
+        // Filter out IPs with less than 100 requests
+        var filteredCounts = {};
+        for (var ip in ipAccessCounts) {
+            if (ipAccessCounts[ip] >= 100) {
+                filteredCounts[ip] = ipAccessCounts[ip];
+            }
+        }
+        ipAccessCounts = filteredCounts;
+        blacklist_currentPage = 1; // Reset to first page
         blacklist_totalPages = Math.ceil(Object.keys(ipAccessCounts).length / blacklist_entriesPerPage);
 
         function sortkv(obj) {
@@ -1459,6 +1615,7 @@
                 var row = $("<tr>").appendTo(tableBody);
                 $("<td>").text(ip).appendTo(row);
                 $("<td>").text(accessCount).appendTo(row);
+                $("<td>").text(getCountryISOFromQuickBan(ip)).appendTo(row);
                 if (ipInBlacklist(ip)){
                     $("<td>").html(`<button class="ui basic green tiny icon button" title"Unban IP" onclick="handleUnban('${ip}');"><i class="green check icon"></i></button>`).appendTo(row);
                 }else{
@@ -1468,7 +1625,7 @@
 
             if (slicedEntries.length == 0){
                 var row = $("<tr>").appendTo(tableBody);
-                $("<td colspan='3'>").html(`
+                $("<td colspan='4'>").html(`
                     <i class="ui green circle check icon"></i> There are no HTTP requests recorded today     
                 `).appendTo(row);
                 
@@ -1515,4 +1672,18 @@
     function handleUnban(targetIp){
         removeIpBlacklist(targetIp);
     }
+
+    //Bind UI events
+    // Scope to this page's accordion only; .advanceSettings is reused by
+    // other webmin components loaded dynamically via ajax.
+    $("#accessAdvanceSettings").accordion();
+
+    //Bind on tab switch events
+    tabSwitchEventBind["access"] = function(){
+        //The lists are only loaded when this component is first rendered or
+        //when another access rule is picked. Anything that changed them in
+        //between - another session, or a plugin syncing IPs into a whitelist -
+        //stays invisible until a full page reload, so reload them here.
+        initBlackWhitelistTables();
+    };
 </script>

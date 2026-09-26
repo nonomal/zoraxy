@@ -1,0 +1,194 @@
+package main
+
+/*
+	Type and flag definations
+
+	This file contains all the type and flag definations
+	Author: tobychui
+*/
+
+import (
+	"embed"
+	"flag"
+	"net/http"
+	"time"
+
+	"imuslab.com/zoraxy/mod/auth/sso/oauth2"
+
+	"imuslab.com/zoraxy/mod/access"
+	"imuslab.com/zoraxy/mod/acme"
+	"imuslab.com/zoraxy/mod/auth"
+	"imuslab.com/zoraxy/mod/auth/sso/forward"
+	"imuslab.com/zoraxy/mod/auth/sso/zorxauth"
+	"imuslab.com/zoraxy/mod/database"
+	"imuslab.com/zoraxy/mod/dockerux"
+	"imuslab.com/zoraxy/mod/dynamicproxy/loadbalance"
+	"imuslab.com/zoraxy/mod/dynamicproxy/redirection"
+	"imuslab.com/zoraxy/mod/forwardproxy"
+	"imuslab.com/zoraxy/mod/geodb"
+	"imuslab.com/zoraxy/mod/info/logger"
+	"imuslab.com/zoraxy/mod/info/logviewer"
+	"imuslab.com/zoraxy/mod/mdns"
+	"imuslab.com/zoraxy/mod/netstat"
+	"imuslab.com/zoraxy/mod/pathrule"
+	"imuslab.com/zoraxy/mod/plugins"
+	"imuslab.com/zoraxy/mod/sshprox"
+	"imuslab.com/zoraxy/mod/statistic"
+	"imuslab.com/zoraxy/mod/statistic/analytic"
+	"imuslab.com/zoraxy/mod/streamproxy"
+	"imuslab.com/zoraxy/mod/tlscert"
+	"imuslab.com/zoraxy/mod/uptime"
+	"imuslab.com/zoraxy/mod/webserv"
+)
+
+const (
+	/* Build Constants */
+	SYSTEM_NAME    = "Zoraxy"
+	SYSTEM_VERSION = "3.3.5"
+
+	/* System Constants */
+	WEBSERV_DEFAULT_PORT         = 5487
+	MDNS_HOSTNAME_PREFIX         = "zoraxy_" /* Follow by node UUID */
+	MDNS_IDENTIFY_DEVICE_TYPE    = "Network Gateway"
+	MDNS_IDENTIFY_DOMAIN         = "zoraxy.aroz.org"
+	MDNS_IDENTIFY_VENDOR         = "imuslab.com"
+	MDNS_SCAN_TIMEOUT            = 30 /* Seconds */
+	MDNS_SCAN_UPDATE_INTERVAL    = 15 /* Minutes */
+	GEODB_CACHE_CLEAR_INTERVAL   = 15 /* Minutes */
+	CSRF_COOKIENAME              = "zoraxy_csrf"
+	LOG_PREFIX                   = "zr"
+	LOG_EXTENSION                = ".log"
+	STATISTIC_AUTO_SAVE_INTERVAL = 600 /* Seconds */
+)
+
+/* System Startup Flags */
+var (
+	webUIPort                  = flag.String("port", ":8000", "Management web interface listening port")
+	databaseBackend            = flag.String("db", "auto", "Database backend to use (leveldb, boltdb, auto) Note that fsdb will be used on unsupported platforms like RISCV")
+	noauth                     = flag.Bool("noauth", false, "Disable authentication for management interface")
+	showver                    = flag.Bool("version", false, "Show version of this server")
+	allowSshLoopback           = flag.Bool("sshlb", false, "Allow loopback web ssh connection (DANGER)")
+	allowMdnsScanning          = flag.Bool("mdns", true, "Enable mDNS scanner and transponder")
+	mdnsName                   = flag.String("mdnsname", "", "mDNS name, leave empty to use default (zoraxy_{node-uuid}.local)")
+	runningInDocker            = flag.Bool("docker", false, "Run Zoraxy in docker compatibility mode")
+	enableHighSpeedGeoIPLookup = flag.Bool("fastgeoip", true, "Enable high speed geoip lookup, disable this if you are using a very small memory footprint device")
+	enableAutoUpdate           = flag.Bool("cfgupgrade", true, "Enable auto config upgrade if breaking change is detected")
+
+	/* Acme Configuration Flags */
+	acmeAutoRenewInterval = flag.Int("autorenew", 86400, "ACME auto TLS/SSL certificate renew check interval (seconds)")
+	acmeCertAutoRenewDays = flag.Int("earlyrenew", 30, "Number of days to early renew a soon expiring certificate (days)")
+	acmeTestMode          = flag.Bool("acmetestmode", false, "Run ACME in test/staging mode")
+	acmeKeyFileMode       = flag.String("acmekeymode", "0600", "File mode for ACME private key files (octal)")
+	acmePublicFileMode    = flag.String("acmepublicmode", "0644", "File mode for ACME certificate and metadata files (octal)")
+
+	/* Logging Configuration Flags */
+	enableLog = flag.Bool("enablelog", true, "Enable system wide logging, set to false for writing log to STDOUT only")
+
+	/* Statistics Configuration Flags */
+	statsMaxEntriesPerMap = flag.Int("stats_max_entries", 20000, "Soft-cap per-dimension statistics maps at N entries; when exceeded the entries with the lowest request counts are dropped first (0 = unbounded)")
+
+	/* Default Configuration Flags */
+	defaultInboundPort          = flag.Int("default_inbound_port", 443, "Default web server listening port")
+	defaultEnableInboundTraffic = flag.Bool("default_inbound_enabled", true, "If web server is enabled by default")
+
+	/* Proxy Timeout Configuration Flags */
+	proxyReadHeaderTimeout = flag.Int("readheadertimeout", 30, "Proxy server read header timeout in seconds (0 = disabled)")
+	proxyWriteTimeout      = flag.Int("writetimeout", 0, "Proxy server write timeout in seconds (0 = disabled, recommended for long-running requests)")
+	proxyIdleTimeout       = flag.Int("idletimeout", 300, "Proxy server idle keep-alive connection timeout in seconds (0 = disabled)")
+
+	/* HTTP/2 Configuration Flags */
+	proxyDisableHttp2       = flag.Bool("disablehttp2", false, "Disable HTTP/2 on the TLS listener and serve HTTP/1.1 only")
+	proxyH2MaxStreams       = flag.Uint("h2_max_concurrent_streams", 0, "HTTP/2 max concurrent streams per connection (0 = Go default)")
+	proxyH2ConnBufferSize   = flag.Int("h2_conn_buffer", 0, "HTTP/2 max upload buffer per connection in bytes, min 65536 (0 = Go default)")
+	proxyH2StreamBufferSize = flag.Int("h2_stream_buffer", 0, "HTTP/2 max upload buffer per stream in bytes, min 65536 (0 = Go default)")
+
+	/* HTTP/3 (QUIC) Configuration Flags */
+	proxyH3MaxStreams = flag.Uint("h3_max_concurrent_streams", 0, "HTTP/3 max concurrent streams per connection (0 = quic-go default)")
+
+	/* Path Configuration Flags */
+	path_database  = flag.String("dbpath", "./sys.db", "Database path")
+	path_conf      = flag.String("conf", "./conf", "Configuration folder path")
+	path_tmp       = flag.String("tmp", "./tmp", "Temporary folder path")
+	path_uuid      = flag.String("uuid", "./sys.uuid", "sys.uuid file path")
+	path_logFile   = flag.String("log", "./log", "Log folder path")
+	path_webserver = flag.String("webroot", "./www", "Static web server root folder. Only allow change in start paramters")
+	path_plugin    = flag.String("plugin", "./plugins", "Plugin folder path")
+
+	/* Maintaince & Development Function Flags */
+	geoDbUpdate       = flag.Bool("update_geoip", false, "Download the latest GeoIP data and exit")
+	development_build = flag.Bool("dev", false, "Use external web folder for UI development and enable verbose logging")
+	reset_account     = flag.Bool("reset_ac", false, "Reset admin account username and password to default and exit")
+)
+
+/* Global Variables and Handlers */
+var (
+	/* System */
+	nodeUUID    = "generic" //System uuid in uuidv4 format, load from database on startup
+	bootTime    = time.Now().Unix()
+	requireAuth = true //Require authentication for webmin panel, override from flag
+
+	/* Path variables initialized after flag parsing */
+	TMP_FOLDER                 string //Temporary folder path
+	ACME_AUTORENEW_CONFIG_PATH string //ACME auto renew configuration path
+	CONF_FOLDER                string //Configuration folder path
+	CONF_HTTP_PROXY            string //HTTP proxy configuration path
+	CONF_STREAM_PROXY          string //Stream proxy configuration path
+	CONF_CERT_STORE            string //Certificate store path
+	CONF_REDIRECTION           string //Redirection configuration path
+	CONF_ACCESS_RULE           string //Access rule configuration path
+	CONF_PATH_RULE             string //Path rule configuration path
+	CONF_PLUGIN_GROUPS         string //Plugin groups configuration path
+	CONF_GEODB_PATH            string //GeoIP database path
+	CONF_LOG_CONFIG            string //Log configuration path
+	CONF_TRUSTED_PROXIES       string //Trusted proxy IPs configuration path
+
+	/* mDNS */
+	previousmdnsScanResults = []*mdns.NetworkHost{}
+	mdnsTickerStop          chan bool
+
+	/*
+		Binary Embedding File System
+	*/
+	//go:embed web/*
+	webres embed.FS
+
+	/*
+		Handler Modules
+	*/
+	sysdb          *database.Database              //System database
+	authAgent      *auth.AuthAgent                 //Authentication agent
+	tlsCertManager *tlscert.Manager                //TLS / SSL management
+	redirectTable  *redirection.RuleTable          //Handle special redirection rule sets
+	webminPanelMux *http.ServeMux                  //Server mux for handling webmin panel APIs
+	csrfMiddleware func(http.Handler) http.Handler //CSRF protection middleware
+
+	pathRuleHandler    *pathrule.Handler         //Handle specific path blocking or custom headers
+	geodbStore         *geodb.Store              //GeoIP database, for resolving IP into country code
+	accessController   *access.Controller        //Access controller, handle black list and white list
+	netstatBuffers     *netstat.NetStatBuffers   //Realtime graph buffers
+	statisticCollector *statistic.Collector      //Collecting statistic from visitors
+	uptimeMonitor      *uptime.Monitor           //Uptime monitor service worker
+	mdnsScanner        *mdns.MDNSHost            //mDNS discovery services
+	webSshManager      *sshprox.Manager          //Web SSH connection service
+	streamProxyManager *streamproxy.Manager      //Stream Proxy Manager for TCP / UDP forwarding
+	acmeHandler        *acme.ACMEHandler         //Handler for ACME Certificate renew
+	acmeAutoRenewer    *acme.AutoRenewer         //Handler for ACME auto renew ticking
+	staticWebServer    *webserv.WebServer        //Static web server for hosting simple stuffs
+	forwardProxy       *forwardproxy.Handler     //HTTP Forward proxy, basically VPN for web browser
+	loadBalancer       *loadbalance.RouteManager //Global scope loadbalancer, store the state of the lb routing
+	pluginManager      *plugins.Manager          //Plugin manager for managing plugins
+
+	//Plugin auth related
+	pluginApiKeyManager *auth.APIKeyManager //API key manager for plugin authentication
+
+	//Authentication Provider
+	forwardAuthRouter *forward.AuthRouter  // Forward Auth router for Authelia/Authentik/etc authentication
+	oauth2Router      *oauth2.OAuth2Router //OAuth2Router router for OAuth2Router authentication
+	zorxAuthRouter    *zorxauth.AuthRouter //ZorxAuth router for ZorxAuth SSO authentication
+
+	//Helper modules
+	AnalyticLoader    *analytic.DataLoader  //Data loader for Zoraxy Analytic
+	DockerUXOptimizer *dockerux.UXOptimizer //Docker user experience optimizer, community contribution only
+	SystemWideLogger  *logger.Logger        //Logger for Zoraxy
+	LogViewer         *logviewer.Viewer     //Log viewer HTTP handlers
+)

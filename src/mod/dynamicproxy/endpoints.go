@@ -7,6 +7,8 @@ import (
 
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
+	"imuslab.com/zoraxy/mod/dynamicproxy/loadbalance"
+	"imuslab.com/zoraxy/mod/dynamicproxy/rewrite"
 )
 
 /*
@@ -25,7 +27,12 @@ import (
 
 // Check if a user define header exists in this endpoint, ignore case
 func (ep *ProxyEndpoint) UserDefinedHeaderExists(key string) bool {
-	for _, header := range ep.UserDefinedHeaders {
+	endpointProxyRewriteRules := GetDefaultHeaderRewriteRules()
+	if ep.HeaderRewriteRules != nil {
+		endpointProxyRewriteRules = ep.HeaderRewriteRules
+	}
+
+	for _, header := range endpointProxyRewriteRules.UserDefinedHeaders {
 		if strings.EqualFold(header.Key, key) {
 			return true
 		}
@@ -35,26 +42,32 @@ func (ep *ProxyEndpoint) UserDefinedHeaderExists(key string) bool {
 
 // Remvoe a user defined header from the list
 func (ep *ProxyEndpoint) RemoveUserDefinedHeader(key string) error {
-	newHeaderList := []*UserDefinedHeader{}
-	for _, header := range ep.UserDefinedHeaders {
+	newHeaderList := []*rewrite.UserDefinedHeader{}
+	if ep.HeaderRewriteRules == nil {
+		ep.HeaderRewriteRules = GetDefaultHeaderRewriteRules()
+	}
+	for _, header := range ep.HeaderRewriteRules.UserDefinedHeaders {
 		if !strings.EqualFold(header.Key, key) {
 			newHeaderList = append(newHeaderList, header)
 		}
 	}
 
-	ep.UserDefinedHeaders = newHeaderList
+	ep.HeaderRewriteRules.UserDefinedHeaders = newHeaderList
 
 	return nil
 }
 
 // Add a user defined header to the list, duplicates will be automatically removed
-func (ep *ProxyEndpoint) AddUserDefinedHeader(newHeaderRule *UserDefinedHeader) error {
+func (ep *ProxyEndpoint) AddUserDefinedHeader(newHeaderRule *rewrite.UserDefinedHeader) error {
 	if ep.UserDefinedHeaderExists(newHeaderRule.Key) {
 		ep.RemoveUserDefinedHeader(newHeaderRule.Key)
 	}
 
+	if ep.HeaderRewriteRules == nil {
+		ep.HeaderRewriteRules = GetDefaultHeaderRewriteRules()
+	}
 	newHeaderRule.Key = cases.Title(language.Und, cases.NoLower).String(newHeaderRule.Key)
-	ep.UserDefinedHeaders = append(ep.UserDefinedHeaders, newHeaderRule)
+	ep.HeaderRewriteRules.UserDefinedHeaders = append(ep.HeaderRewriteRules.UserDefinedHeaders, newHeaderRule)
 	return nil
 }
 
@@ -84,6 +97,55 @@ func (ep *ProxyEndpoint) GetVirtualDirectoryRuleByMatchingPath(matchingPath stri
 	return nil
 }
 
+// HasSameTarget reports whether this virtual directory points at the same target as the given
+// spec (domain + TLS settings). The matching path is assumed to already be equal. Used to decide
+// whether a bulk apply/remove may treat an existing directory as "ours" (safe to skip or remove)
+// or as a user-customized one that must be left untouched.
+func (vdir *VirtualDirectoryEndpoint) HasSameTarget(domain string, requireTLS bool, skipCertValidations bool) bool {
+	return vdir.Domain == domain && vdir.RequireTLS == requireTLS && vdir.SkipCertValidations == skipCertValidations
+}
+
+// BulkVdirAction describes what a bulk virtual-directory apply/remove operation should do for one host.
+type BulkVdirAction string
+
+const (
+	BulkVdirCreate   BulkVdirAction = "create"   // directory is missing and should be created
+	BulkVdirRemove   BulkVdirAction = "remove"   // an identical directory exists and should be removed
+	BulkVdirSkip     BulkVdirAction = "skip"     // an identical directory already exists; nothing to do
+	BulkVdirConflict BulkVdirAction = "conflict" // a directory exists at this path with different settings; leave it untouched
+	BulkVdirNoop     BulkVdirAction = "noop"     // nothing present to remove
+)
+
+// ClassifyBulkVdir decides the action for a single host in a bulk virtual-directory operation,
+// given the desired target spec and the host's existing directory at the same matching path
+// (nil if none).
+//
+//	ensurePresent = true  -> make sure the directory exists (used for forward-auth hosts)
+//	ensurePresent = false -> make sure the directory is absent (used for non-forward-auth hosts)
+//
+// An existing directory is only ever skipped (when ensuring present) or removed (when ensuring
+// absent) if it has the SAME target as the spec. A directory at the same path with different
+// settings is reported as a conflict and left untouched, so user-customized directories are
+// never silently changed or deleted.
+func ClassifyBulkVdir(ensurePresent bool, existing *VirtualDirectoryEndpoint, domain string, requireTLS bool, skipCertValidations bool) BulkVdirAction {
+	if ensurePresent {
+		if existing == nil {
+			return BulkVdirCreate
+		}
+		if existing.HasSameTarget(domain, requireTLS, skipCertValidations) {
+			return BulkVdirSkip
+		}
+		return BulkVdirConflict
+	}
+	if existing == nil {
+		return BulkVdirNoop
+	}
+	if existing.HasSameTarget(domain, requireTLS, skipCertValidations) {
+		return BulkVdirRemove
+	}
+	return BulkVdirConflict
+}
+
 // Delete a vdir rule by its matching path
 func (ep *ProxyEndpoint) RemoveVirtualDirectoryRuleByMatchingPath(matchingPath string) error {
 	entryFound := false
@@ -104,7 +166,7 @@ func (ep *ProxyEndpoint) RemoveVirtualDirectoryRuleByMatchingPath(matchingPath s
 	return errors.New("target virtual directory routing rule not found")
 }
 
-// Delete a vdir rule by its matching path
+// Add a vdir rule by its matching path
 func (ep *ProxyEndpoint) AddVirtualDirectoryRule(vdir *VirtualDirectoryEndpoint) (*ProxyEndpoint, error) {
 	//Check for matching path duplicate
 	if ep.GetVirtualDirectoryRuleByMatchingPath(vdir.MatchingPath) != nil {
@@ -121,16 +183,136 @@ func (ep *ProxyEndpoint) AddVirtualDirectoryRule(vdir *VirtualDirectoryEndpoint)
 		return nil, err
 	}
 
-	if ep.ProxyType == ProxyType_Root {
+	switch ep.ProxyType {
+	case ProxyTypeRoot:
 		parentRouter.Root = readyRoutingRule
-	} else if ep.ProxyType == ProxyType_Host {
+	case ProxyTypeHost:
 		ep.Remove()
 		parentRouter.AddProxyRouteToRuntime(readyRoutingRule)
-	} else {
+	default:
 		return nil, errors.New("unsupported proxy type")
 	}
 
 	return readyRoutingRule, nil
+}
+
+/* Upstream related wrapper functions */
+//Check if there already exists another upstream with identical origin
+func (ep *ProxyEndpoint) UpstreamOriginExists(originURL string) bool {
+	for _, origin := range ep.ActiveOrigins {
+		if origin.OriginIpOrDomain == originURL {
+			return true
+		}
+	}
+	for _, origin := range ep.InactiveOrigins {
+		if origin.OriginIpOrDomain == originURL {
+			return true
+		}
+	}
+	return false
+}
+
+// Get a upstream origin from given origin ip or domain
+func (ep *ProxyEndpoint) GetUpstreamOriginByMatchingIP(originIpOrDomain string) (*loadbalance.Upstream, error) {
+	for _, origin := range ep.ActiveOrigins {
+		if origin.OriginIpOrDomain == originIpOrDomain {
+			return origin, nil
+		}
+	}
+
+	for _, origin := range ep.InactiveOrigins {
+		if origin.OriginIpOrDomain == originIpOrDomain {
+			return origin, nil
+		}
+	}
+	return nil, errors.New("target upstream origin not found")
+}
+
+// upstreamTLSServerName returns the hostname to use as the upstream TLS SNI /
+// certificate verification name, or "" to derive it from the upstream address.
+func (ep *ProxyEndpoint) upstreamTLSServerName() string {
+	if ep.HeaderRewriteRules == nil {
+		return ""
+	}
+	return ep.HeaderRewriteRules.RequestHostOverwrite
+}
+
+// Add upstream to endpoint and update it to runtime
+func (ep *ProxyEndpoint) AddUpstreamOrigin(newOrigin *loadbalance.Upstream, activate bool) error {
+	//Check if the upstream already exists
+	if ep.UpstreamOriginExists(newOrigin.OriginIpOrDomain) {
+		return errors.New("upstream with same origin already exists")
+	}
+
+	if activate {
+		//Add it to the active origin list
+		err := newOrigin.StartProxy(ep.upstreamTLSServerName())
+		if err != nil {
+			return err
+		}
+		ep.ActiveOrigins = append(ep.ActiveOrigins, newOrigin)
+	} else {
+		//Add to inactive origin list
+		ep.InactiveOrigins = append(ep.InactiveOrigins, newOrigin)
+	}
+
+	ep.UpdateToRuntime()
+	return nil
+}
+
+// Remove upstream from endpoint and update it to runtime
+func (ep *ProxyEndpoint) RemoveUpstreamOrigin(originIpOrDomain string) error {
+	//Just to make sure there are no spaces
+	originIpOrDomain = strings.TrimSpace(originIpOrDomain)
+
+	//Check if the upstream already been removed
+	if !ep.UpstreamOriginExists(originIpOrDomain) {
+		//Not exists in the first place
+		return nil
+	}
+
+	newActiveOriginList := []*loadbalance.Upstream{}
+	for _, origin := range ep.ActiveOrigins {
+		if origin.OriginIpOrDomain != originIpOrDomain {
+			newActiveOriginList = append(newActiveOriginList, origin)
+		}
+	}
+
+	newInactiveOriginList := []*loadbalance.Upstream{}
+	for _, origin := range ep.InactiveOrigins {
+		if origin.OriginIpOrDomain != originIpOrDomain {
+			newInactiveOriginList = append(newInactiveOriginList, origin)
+		}
+	}
+	//Ok, set the origin list to the new one
+	ep.ActiveOrigins = newActiveOriginList
+	ep.InactiveOrigins = newInactiveOriginList
+	ep.UpdateToRuntime()
+	return nil
+}
+
+// Check if the proxy endpoint hostname or alias name contains subdomain wildcard
+func (ep *ProxyEndpoint) ContainsWildcardName(skipAliasCheck bool) bool {
+	hostname := ep.RootOrMatchingDomain
+	aliasHostnames := ep.MatchingDomainAlias
+
+	wildcardCheck := func(hostname string) bool {
+		return len(hostname) > 0 && hostname[0] == '*'
+	}
+
+	if wildcardCheck(hostname) {
+		return true
+	}
+
+	if !skipAliasCheck {
+		for _, aliasHostname := range aliasHostnames {
+			if wildcardCheck(aliasHostname) {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // Create a deep clone object of the proxy endpoint
@@ -144,13 +326,20 @@ func (ep *ProxyEndpoint) Clone() *ProxyEndpoint {
 
 // Remove this proxy endpoint from running proxy endpoint list
 func (ep *ProxyEndpoint) Remove() error {
-	ep.parent.ProxyEndpoints.Delete(ep.RootOrMatchingDomain)
+	lookupHostname := strings.ToLower(ep.RootOrMatchingDomain)
+	ep.parent.ProxyEndpoints.Delete(lookupHostname)
 	return nil
+}
+
+// Check if the proxy endpoint is enabled
+func (ep *ProxyEndpoint) IsEnabled() bool {
+	return !ep.Disabled
 }
 
 // Write changes to runtime without respawning the proxy handler
 // use prepare -> remove -> add if you change anything in the endpoint
 // that effects the proxy routing src / dest
 func (ep *ProxyEndpoint) UpdateToRuntime() {
-	ep.parent.ProxyEndpoints.Store(ep.RootOrMatchingDomain, ep)
+	lookupHostname := strings.ToLower(ep.RootOrMatchingDomain)
+	ep.parent.ProxyEndpoints.Store(lookupHostname, ep)
 }

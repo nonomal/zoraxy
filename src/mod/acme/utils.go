@@ -5,14 +5,14 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"os"
 	"time"
 )
 
 // Get the issuer name from pem file
 func ExtractIssuerNameFromPEM(pemFilePath string) (string, error) {
 	// Read the PEM file
-	pemData, err := ioutil.ReadFile(pemFilePath)
+	pemData, err := os.ReadFile(pemFilePath)
 	if err != nil {
 		return "", err
 	}
@@ -64,6 +64,20 @@ func ExtractIssuerName(certBytes []byte) (string, error) {
 	return issuer, nil
 }
 
+// ExtractDomainsFromPEM reads a PEM certificate file and returns all SANs
+func ExtractDomainsFromPEM(pemFilePath string) ([]string, error) {
+
+	certBytes, err := os.ReadFile(pemFilePath)
+	if err != nil {
+		return nil, err
+	}
+	domains, err := ExtractDomains(certBytes)
+	if err != nil {
+		return nil, err
+	}
+	return domains, nil
+}
+
 // Check if a cert is expired by public key
 func CertIsExpired(certBytes []byte) bool {
 	block, _ := pem.Decode(certBytes)
@@ -81,13 +95,14 @@ func CertIsExpired(certBytes []byte) bool {
 	return false
 }
 
-func CertExpireSoon(certBytes []byte) bool {
+// CertExpireSoon check if the given cert bytes will expires within the given number of days from now
+func CertExpireSoon(certBytes []byte, numberOfDays int) bool {
 	block, _ := pem.Decode(certBytes)
 	if block != nil {
 		cert, err := x509.ParseCertificate(block.Bytes)
 		if err == nil {
 			expirationDate := cert.NotAfter
-			threshold := 14 * 24 * time.Hour // 14 days
+			threshold := time.Duration(numberOfDays) * 24 * time.Hour
 
 			timeRemaining := time.Until(expirationDate)
 			if timeRemaining <= threshold {

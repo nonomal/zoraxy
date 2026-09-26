@@ -1,25 +1,41 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net/http"
+	"net/netip"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
+	"imuslab.com/zoraxy/mod/auth/sso/oauth2"
+	"imuslab.com/zoraxy/mod/eventsystem"
+
+	"github.com/gorilla/csrf"
 	"imuslab.com/zoraxy/mod/access"
 	"imuslab.com/zoraxy/mod/acme"
 	"imuslab.com/zoraxy/mod/auth"
+	"imuslab.com/zoraxy/mod/auth/sso/forward"
+	"imuslab.com/zoraxy/mod/auth/sso/zorxauth"
 	"imuslab.com/zoraxy/mod/database"
+	"imuslab.com/zoraxy/mod/database/dbinc"
+	"imuslab.com/zoraxy/mod/dockerux"
+	"imuslab.com/zoraxy/mod/dynamicproxy/loadbalance"
 	"imuslab.com/zoraxy/mod/dynamicproxy/redirection"
 	"imuslab.com/zoraxy/mod/forwardproxy"
-	"imuslab.com/zoraxy/mod/ganserv"
 	"imuslab.com/zoraxy/mod/geodb"
+	"imuslab.com/zoraxy/mod/info/hardwareinfo"
 	"imuslab.com/zoraxy/mod/info/logger"
+	"imuslab.com/zoraxy/mod/info/logviewer"
+	"imuslab.com/zoraxy/mod/info/usageinfo"
 	"imuslab.com/zoraxy/mod/mdns"
 	"imuslab.com/zoraxy/mod/netstat"
 	"imuslab.com/zoraxy/mod/pathrule"
+	"imuslab.com/zoraxy/mod/plugins"
+	"imuslab.com/zoraxy/mod/plugins/zoraxy_plugin"
 	"imuslab.com/zoraxy/mod/sshprox"
 	"imuslab.com/zoraxy/mod/statistic"
 	"imuslab.com/zoraxy/mod/statistic/analytic"
@@ -32,20 +48,69 @@ import (
 	Startup Sequence
 
 	This function starts the startup sequence of all
-	required modules
+	required modules. Their startup sequences are inter-dependent
+	and must be started in a specific order.
+
+	Don't touch this function unless you know what you are doing
 */
 
-var (
-	/*
-		MDNS related
-	*/
-	previousmdnsScanResults = []*mdns.NetworkHost{}
-	mdnsTickerStop          chan bool
-)
-
 func startupSequence() {
+	//Start a system wide logger and log viewer
+	l, err := logger.NewLogger(LOG_PREFIX, *path_logFile)
+	if err == nil {
+		SystemWideLogger = l
+	} else {
+		panic(err)
+	}
+
+	if !*enableLog {
+		//Disable file logging, use fmt logger instead
+		l, err = logger.NewFmtLogger()
+		if err != nil {
+			panic(err)
+		}
+		SystemWideLogger = l
+		SystemWideLogger.Println("System wide logging is disabled, all logs will be printed to STDOUT only")
+	} else {
+		// Load log configuration from file
+		logConfig, err := logger.LoadLogConfig(CONF_LOG_CONFIG)
+		if err != nil {
+			SystemWideLogger.Println("Failed to load log config, using defaults: " + err.Error())
+			logConfig = &logger.LogConfig{
+				Enabled:  false,
+				MaxSize:  "0",
+				Compress: true,
+			}
+		}
+
+		// Apply the configuration
+		if err := l.ApplyLogConfig(logConfig); err != nil {
+			SystemWideLogger.Println("Failed to apply log config: " + err.Error())
+		}
+
+		SystemWideLogger = l
+		if !logConfig.Enabled {
+			SystemWideLogger.Println("Log rotation is disabled")
+		} else {
+			SystemWideLogger.Println("Log rotation is enabled, max log file size " + logConfig.MaxSize)
+		}
+		SystemWideLogger.Println("System wide logging is enabled")
+	}
+
+	LogViewer = logviewer.NewLogViewer(&logviewer.ViewerOption{
+		RootFolder: *path_logFile,
+	})
+
 	//Create database
-	db, err := database.NewDatabase("sys.db", false)
+	backendType := database.GetRecommendedBackendType()
+	switch *databaseBackend {
+	case "leveldb":
+		backendType = dbinc.BackendLevelDB
+	case "boltdb":
+		backendType = dbinc.BackendBoltDB
+	}
+	l.PrintAndLog("database", "Using "+backendType.String()+" as the database backend", nil)
+	db, err := database.NewDatabase(*path_database, backendType)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -54,21 +119,24 @@ func startupSequence() {
 	sysdb.NewTable("settings")
 
 	//Create tmp folder and conf folder
-	os.MkdirAll("./tmp", 0775)
-	os.MkdirAll("./conf/proxy/", 0775)
+	os.MkdirAll(TMP_FOLDER, 0775)
+	os.MkdirAll(CONF_HTTP_PROXY, 0775)
 
 	//Create an auth agent
-	sessionKey, err := auth.GetSessionKey(sysdb)
+	sessionKey, err := auth.GetSessionKey(sysdb, SystemWideLogger)
 	if err != nil {
 		log.Fatal(err)
 	}
-	authAgent = auth.NewAuthenticationAgent(name, []byte(sessionKey), sysdb, true, func(w http.ResponseWriter, r *http.Request) {
+	authAgent = auth.NewAuthenticationAgent(SYSTEM_NAME, []byte(sessionKey), sysdb, true, SystemWideLogger, func(w http.ResponseWriter, r *http.Request) {
 		//Not logged in. Redirecting to login page
-		http.Redirect(w, r, ppf("/login.html"), http.StatusTemporaryRedirect)
+		http.Redirect(w, r, "/login.html", http.StatusTemporaryRedirect)
 	})
 
+	// Create an API key manager for plugin authentication
+	pluginApiKeyManager = auth.NewAPIKeyManager()
+
 	//Create a TLS certificate manager
-	tlsCertManager, err = tlscert.NewManager("./conf/certs", development)
+	tlsCertManager, err = tlscert.NewManager(CONF_CERT_STORE, SystemWideLogger)
 	if err != nil {
 		panic(err)
 	}
@@ -77,64 +145,95 @@ func startupSequence() {
 	db.NewTable("redirect")
 	redirectAllowRegexp := false
 	db.Read("redirect", "regex", &redirectAllowRegexp)
-	redirectTable, err = redirection.NewRuleTable("./conf/redirect", redirectAllowRegexp)
+	redirectCaseSensitive := false
+	db.Read("redirect", "case_sensitive", &redirectCaseSensitive)
+	redirectTable, err = redirection.NewRuleTable(CONF_REDIRECTION, redirectAllowRegexp, redirectCaseSensitive, SystemWideLogger)
 	if err != nil {
 		panic(err)
 	}
-	redirectTable.Logger = SystemWideLogger
 
 	//Create a geodb store
 	geodbStore, err = geodb.NewGeoDb(sysdb, &geodb.StoreOptions{
-		AllowSlowIpv4LookUp: !*enableHighSpeedGeoIPLookup,
-		AllowSloeIpv6Lookup: !*enableHighSpeedGeoIPLookup,
+		AllowSlowIpv4LookUp:          !*enableHighSpeedGeoIPLookup,
+		AllowSlowIpv6Lookup:          !*enableHighSpeedGeoIPLookup,
+		Logger:                       SystemWideLogger,
+		SlowLookupCacheClearInterval: GEODB_CACHE_CLEAR_INTERVAL * time.Minute,
+		ExternalGeoDBFolder:          CONF_GEODB_PATH,
 	})
 	if err != nil {
 		panic(err)
 	}
+
+	//Create a load balancer
+	loadBalancer = loadbalance.NewLoadBalancer(&loadbalance.Options{
+		SystemUUID: nodeUUID,
+		Geodb:      geodbStore,
+		Logger:     SystemWideLogger,
+	})
 
 	//Create the access controller
 	accessController, err = access.NewAccessController(&access.Options{
-		Database:     sysdb,
-		GeoDB:        geodbStore,
-		ConfigFolder: "./conf/access",
+		Database:           sysdb,
+		GeoDB:              geodbStore,
+		ConfigFolder:       CONF_ACCESS_RULE,
+		TrustedProxiesFile: CONF_TRUSTED_PROXIES,
 	})
 	if err != nil {
 		panic(err)
 	}
+
+	//Create authentication providers
+	forwardAuthRouter = forward.NewAuthRouter(&forward.AuthRouterOptions{
+		Address:  "",
+		Logger:   SystemWideLogger,
+		Database: sysdb,
+	})
+
+	oauth2Router = oauth2.NewOAuth2Router(&oauth2.OAuth2RouterOptions{
+		Logger:   SystemWideLogger,
+		Database: sysdb,
+	})
+
+	zorxAuthRouter = zorxauth.NewAuthRouter(sysdb, SystemWideLogger)
 
 	//Create a statistic collector
 	statisticCollector, err = statistic.NewStatisticCollector(statistic.CollectorOption{
-		Database: sysdb,
+		Database:             sysdb,
+		MaxEntriesPerStatMap: *statsMaxEntriesPerMap,
 	})
 	if err != nil {
 		panic(err)
 	}
-
-	//Create a system wide logger
-	l, err := logger.NewLogger("zr", "./log", *logOutputToFile)
-	if err == nil {
-		SystemWideLogger = l
-	} else {
-		panic(err)
-	}
+	statisticCollector.SetAutoSave(STATISTIC_AUTO_SAVE_INTERVAL)
 
 	//Start the static web server
 	staticWebServer = webserv.NewWebServer(&webserv.WebServerOptions{
 		Sysdb:                  sysdb,
-		Port:                   "5487", //Default Port
-		WebRoot:                *staticWebServerRoot,
+		Port:                   strconv.Itoa(WEBSERV_DEFAULT_PORT), //Default Port
+		WebRoot:                *path_webserver,
 		EnableDirectoryListing: true,
-		EnableWebDirManager:    *allowWebFileManager,
+		EnableWebDAV:           false,  //WebDAV disabled by default, can be enabled via UI
+		WebDAVPort:             "5488", //Default WebDAV port
+		Logger:                 SystemWideLogger,
+		AuthAgent:              authAgent,
 	})
 	//Restore the web server to previous shutdown state
 	staticWebServer.RestorePreviousState()
 
 	//Create a netstat buffer
-	netstatBuffers, err = netstat.NewNetStatBuffer(300)
+	netstatBuffers, err = netstat.NewNetStatBuffer(300, SystemWideLogger)
 	if err != nil {
 		SystemWideLogger.PrintAndLog("Network", "Failed to load network statistic info", err)
 		panic(err)
 	}
+
+	//Start the status page host resource monitors
+	//CPU / RAM usage is sampled once per second in the background so the
+	//dashboard API can return cached values without blocking
+	usageinfo.StartBackgroundMonitor()
+	hardwareinfo.SetLogger(SystemWideLogger)
+	hardwareinfo.StartHostInfoCache()
+	initDashboardBandwidthTracker()
 
 	/*
 		Path Rules
@@ -145,7 +244,7 @@ func startupSequence() {
 
 	pathRuleHandler = pathrule.NewPathRuleHandler(&pathrule.Options{
 		Enabled:      false,
-		ConfigFolder: "./conf/rules/pathrules",
+		ConfigFolder: CONF_PATH_RULE,
 	})
 
 	/*
@@ -163,7 +262,7 @@ func startupSequence() {
 
 		hostName := *mdnsName
 		if hostName == "" {
-			hostName = "zoraxy_" + nodeUUID
+			hostName = MDNS_HOSTNAME_PREFIX + nodeUUID
 		} else {
 			//Trim off the suffix
 			hostName = strings.TrimSuffix(hostName, ".local")
@@ -172,24 +271,24 @@ func startupSequence() {
 		mdnsScanner, err = mdns.NewMDNS(mdns.NetworkHost{
 			HostName:     hostName,
 			Port:         portInt,
-			Domain:       "zoraxy.arozos.com",
-			Model:        "Network Gateway",
+			Domain:       MDNS_IDENTIFY_DOMAIN,
+			Model:        MDNS_IDENTIFY_DEVICE_TYPE,
 			UUID:         nodeUUID,
-			Vendor:       "imuslab.com",
-			BuildVersion: version,
+			Vendor:       MDNS_IDENTIFY_VENDOR,
+			BuildVersion: SYSTEM_VERSION,
 		}, "")
 		if err != nil {
 			SystemWideLogger.Println("Unable to startup mDNS service. Disabling mDNS services")
 		} else {
 			//Start initial scanning
 			go func() {
-				hosts := mdnsScanner.Scan(30, "")
+				hosts := mdnsScanner.Scan(MDNS_SCAN_TIMEOUT, "")
 				previousmdnsScanResults = hosts
 				SystemWideLogger.Println("mDNS Startup scan completed")
 			}()
 
 			//Create a ticker to update mDNS results every 5 minutes
-			ticker := time.NewTicker(15 * time.Minute)
+			ticker := time.NewTicker(MDNS_SCAN_UPDATE_INTERVAL * time.Minute)
 			stopChan := make(chan bool)
 			go func() {
 				for {
@@ -197,7 +296,7 @@ func startupSequence() {
 					case <-stopChan:
 						ticker.Stop()
 					case <-ticker.C:
-						hosts := mdnsScanner.Scan(30, "")
+						hosts := mdnsScanner.Scan(MDNS_SCAN_TIMEOUT, "")
 						previousmdnsScanResults = hosts
 						SystemWideLogger.Println("mDNS scan result updated")
 					}
@@ -207,39 +306,22 @@ func startupSequence() {
 		}
 	}
 
-	/*
-		Global Area Network
-
-		Require zerotier token to work
-	*/
-	usingZtAuthToken := *ztAuthToken
-	if usingZtAuthToken == "" {
-		usingZtAuthToken, err = ganserv.TryLoadorAskUserForAuthkey()
-		if err != nil {
-			SystemWideLogger.Println("Failed to load ZeroTier controller API authtoken")
-		}
-	}
-	ganManager = ganserv.NewNetworkManager(&ganserv.NetworkManagerOptions{
-		AuthToken: usingZtAuthToken,
-		ApiPort:   *ztAPIPort,
-		Database:  sysdb,
-	})
-
 	//Create WebSSH Manager
 	webSshManager = sshprox.NewSSHProxyManager()
 
 	//Create TCP Proxy Manager
-	streamProxyManager = streamproxy.NewStreamProxy(&streamproxy.Options{
-		Database:             sysdb,
+	streamProxyManager, err = streamproxy.NewStreamProxy(&streamproxy.Options{
 		AccessControlHandler: accessController.DefaultAccessRule.AllowConnectionAccess,
+		AccessController:     accessController,
+		ConfigStore:          CONF_STREAM_PROXY,
+		Logger:               SystemWideLogger,
 	})
+	if err != nil {
+		panic(err)
+	}
 
 	//Create WoL MAC storage table
 	sysdb.NewTable("wolmac")
-
-	//Create an email sender if SMTP config exists
-	sysdb.NewTable("smtp")
-	EmailSender = loadSMTPConfig()
 
 	//Create an analytic loader
 	AnalyticLoader = analytic.NewDataLoader(sysdb, statisticCollector)
@@ -264,13 +346,95 @@ func startupSequence() {
 	//Create a table just to store acme related preferences
 	sysdb.NewTable("acmepref")
 	acmeHandler = initACME()
-	acmeAutoRenewer, err = acme.NewAutoRenewer("./conf/acme_conf.json", "./conf/certs/", int64(*acmeAutoRenewInterval), acmeHandler)
+	acmeAutoRenewer, err = acme.NewAutoRenewer(
+		ACME_AUTORENEW_CONFIG_PATH,
+		CONF_CERT_STORE,
+		int64(*acmeAutoRenewInterval),
+		*acmeCertAutoRenewDays,
+		acmeHandler,
+		SystemWideLogger,
+	)
 	if err != nil {
 		log.Fatal(err)
 	}
 
+	/*
+		Plugin Manager
+	*/
+	pluginFolder := *path_plugin
+	pluginFolder = strings.TrimSuffix(pluginFolder, "/")
+
+	ZoraxyPort := 8000
+	ZoraxyAddrPort, err := netip.ParseAddrPort(*webUIPort)
+
+	if err != nil {
+		// check for ":<port>" parameter
+		webUIPortNoPrefix, hadPrefix := strings.CutPrefix(*webUIPort, ":")
+		if hadPrefix {
+			ZoraxyAddrPort, err = netip.ParseAddrPort("0.0.0.0:" + webUIPortNoPrefix)
+		}
+	}
+
+	if err == nil && ZoraxyAddrPort.IsValid() && ZoraxyAddrPort.Port() > 0 {
+		ZoraxyPort = int(ZoraxyAddrPort.Port())
+	} else {
+		SystemWideLogger.PrintAndLog("plugin-manager", fmt.Sprintf("Could not set port for plugin communication (webUI/-port); fallback to default port '%d'", ZoraxyPort), err)
+	}
+
+	pluginManager = plugins.NewPluginManager(&plugins.ManagerOptions{
+		PluginDir:          pluginFolder,
+		Database:           sysdb,
+		Logger:             SystemWideLogger,
+		PluginGroupsConfig: CONF_PLUGIN_GROUPS,
+		APIKeyManager:      pluginApiKeyManager,
+		ZoraxyPort:         ZoraxyPort,
+		CSRFTokenGen: func(r *http.Request) string {
+			return csrf.Token(r)
+		},
+		SystemConst: &zoraxy_plugin.RuntimeConstantValue{
+			ZoraxyVersion:    SYSTEM_VERSION,
+			ZoraxyUUID:       nodeUUID,
+			DevelopmentBuild: *development_build,
+		},
+		/* Plugin Store URLs */
+		PluginStoreURLs: []string{
+			"https://raw.githubusercontent.com/aroz-online/zoraxy-official-plugins/refs/heads/main/directories/index2.json",
+			//TO BE ADDED
+		},
+		/* Developer Options */
+		EnableHotReload:   *development_build, //Default to true if development build
+		HotReloadInterval: 5,                  //seconds
+	})
+
+	/*
+		Event Manager
+	*/
+	eventsystem.InitEventSystem(SystemWideLogger)
+
+	//Sync latest plugin list from the plugin store
+	go func() {
+		err = pluginManager.UpdateDownloadablePluginList()
+		if err != nil {
+			SystemWideLogger.PrintAndLog("plugin-manager", "Failed to sync plugin list from plugin store", err)
+		} else {
+			SystemWideLogger.PrintAndLog("plugin-manager", "Plugin list synced from plugin store", nil)
+		}
+	}()
+
+	err = pluginManager.LoadPluginsFromDisk()
+	if err != nil {
+		SystemWideLogger.PrintAndLog("plugin-manager", "Failed to load plugins", err)
+	}
+
+	/* Docker UX Optimizer */
+	if runtime.GOOS == "windows" && *runningInDocker {
+		SystemWideLogger.PrintAndLog("warning", "Invalid start flag combination: docker=true && runtime.GOOS == windows. Running in docker UX development mode.", nil)
+	}
+	DockerUXOptimizer = dockerux.NewDockerOptimizer(*runningInDocker, SystemWideLogger)
+
 }
 
+/* Finalize Startup Sequence */
 // This sequence start after everything is initialized
 func finalSequence() {
 	//Start ACME renew agent
@@ -279,4 +443,78 @@ func finalSequence() {
 	//Inject routing rules
 	registerBuildInRoutingRules()
 
+	//Set the host specific TLS behavior resolver for resolving TLS behavior for each hostname
+	tlsCertManager.SetHostSpecificTlsBehavior(dynamicProxyRouter.ResolveHostSpecificTlsBehaviorForHostname)
+}
+
+/* Shutdown Sequence */
+func ShutdownSeq() {
+	SystemWideLogger.Println("Shutting down " + SYSTEM_NAME)
+	SystemWideLogger.Println("Closing Netstats Listener")
+	if netstatBuffers != nil {
+		netstatBuffers.Close()
+	}
+
+	SystemWideLogger.Println("Closing Statistic Collector")
+	if statisticCollector != nil {
+		statisticCollector.Close()
+	}
+
+	SystemWideLogger.Println("Saving dashboard bandwidth counters")
+	if dashboardBandwidth != nil {
+		dashboardBandwidth.Close()
+	}
+
+	if mdnsTickerStop != nil {
+		SystemWideLogger.Println("Stopping mDNS Discoverer (might take a few minutes)")
+		// Stop the mdns service
+		mdnsTickerStop <- true
+	}
+	if mdnsScanner != nil {
+		mdnsScanner.Close()
+	}
+
+	SystemWideLogger.Println("Shutting down load balancer")
+	if loadBalancer != nil {
+		loadBalancer.Close()
+	}
+
+	SystemWideLogger.Println("Closing Certificates Auto Renewer")
+	if acmeAutoRenewer != nil {
+		acmeAutoRenewer.Close()
+	}
+
+	if accessController != nil {
+		SystemWideLogger.Println("Closing Access Controller")
+		accessController.Close()
+	}
+
+	if geodbStore != nil {
+		SystemWideLogger.Println("Closing Geo-IP Database")
+		geodbStore.Close()
+	}
+
+	//Close the zorxauth router to save browser sessions
+	if zorxAuthRouter != nil {
+		SystemWideLogger.Println("Shutting down Zoraxy Auth Router")
+		zorxAuthRouter.Close()
+	}
+
+	//Close the plugin manager
+	SystemWideLogger.Println("Shutting down plugin manager")
+	if pluginManager != nil {
+		pluginManager.Close()
+	}
+
+	//Remove the tmp folder
+	SystemWideLogger.Println("Cleaning up tmp files")
+	os.RemoveAll(TMP_FOLDER)
+
+	//Close database
+	SystemWideLogger.Println("Stopping system database")
+	sysdb.Close()
+
+	//Close logger
+	SystemWideLogger.Println("Closing system wide logger")
+	SystemWideLogger.Close()
 }

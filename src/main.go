@@ -1,100 +1,57 @@
 package main
 
+/*
+  ______
+ |___  /
+    / / ___  _ __ __ ___  ___   _
+   / / / _ \| '__/ _` \ \/ / | | |
+  / /_| (_) | | | (_| |>  <| |_| |
+ /_____\___/|_|  \__,_/_/\_\\__, |
+                             __/ |
+                            |___/
+
+Zoraxy - A general purpose HTTP reverse proxy and forwarding tool
+Author: tobychui
+License: AGPLv3
+
+--------------------------------------------
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, version 3 of the License or any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+*/
+
 import (
-	"embed"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
-	"time"
 
 	"github.com/google/uuid"
-	"imuslab.com/zoraxy/mod/access"
-	"imuslab.com/zoraxy/mod/acme"
+	"github.com/gorilla/csrf"
 	"imuslab.com/zoraxy/mod/auth"
-	"imuslab.com/zoraxy/mod/database"
-	"imuslab.com/zoraxy/mod/dynamicproxy/redirection"
-	"imuslab.com/zoraxy/mod/email"
-	"imuslab.com/zoraxy/mod/forwardproxy"
-	"imuslab.com/zoraxy/mod/ganserv"
 	"imuslab.com/zoraxy/mod/geodb"
-	"imuslab.com/zoraxy/mod/info/logger"
-	"imuslab.com/zoraxy/mod/mdns"
-	"imuslab.com/zoraxy/mod/netstat"
-	"imuslab.com/zoraxy/mod/pathrule"
-	"imuslab.com/zoraxy/mod/sshprox"
-	"imuslab.com/zoraxy/mod/statistic"
-	"imuslab.com/zoraxy/mod/statistic/analytic"
-	"imuslab.com/zoraxy/mod/streamproxy"
-	"imuslab.com/zoraxy/mod/tlscert"
-	"imuslab.com/zoraxy/mod/uptime"
+	"imuslab.com/zoraxy/mod/update"
 	"imuslab.com/zoraxy/mod/utils"
-	"imuslab.com/zoraxy/mod/webserv"
 )
 
-// General flags
-var webUIPort = flag.String("port", ":8000", "Management web interface listening port")
-var noauth = flag.Bool("noauth", false, "Disable authentication for management interface")
-var showver = flag.Bool("version", false, "Show version of this server")
-var allowSshLoopback = flag.Bool("sshlb", false, "Allow loopback web ssh connection (DANGER)")
-var allowMdnsScanning = flag.Bool("mdns", true, "Enable mDNS scanner and transponder")
-var mdnsName = flag.String("mdnsname", "", "mDNS name, leave empty to use default (zoraxy_{node-uuid}.local)")
-var ztAuthToken = flag.String("ztauth", "", "ZeroTier authtoken for the local node")
-var ztAPIPort = flag.Int("ztport", 9993, "ZeroTier controller API port")
-var acmeAutoRenewInterval = flag.Int("autorenew", 86400, "ACME auto TLS/SSL certificate renew check interval (seconds)")
-var enableHighSpeedGeoIPLookup = flag.Bool("fastgeoip", false, "Enable high speed geoip lookup, require 1GB extra memory (Not recommend for low end devices)")
-var staticWebServerRoot = flag.String("webroot", "./www", "Static web server root folder. Only allow chnage in start paramters")
-var allowWebFileManager = flag.Bool("webfm", true, "Enable web file manager for static web server root folder")
-var logOutputToFile = flag.Bool("log", true, "Log terminal output to file")
-
-var (
-	name        = "Zoraxy"
-	version     = "3.0.6"
-	nodeUUID    = "generic"
-	development = false //Set this to false to use embedded web fs
-	bootTime    = time.Now().Unix()
-
-	/*
-		Binary Embedding File System
-	*/
-	//go:embed web/*
-	webres embed.FS
-
-	/*
-		Handler Modules
-	*/
-	sysdb              *database.Database      //System database
-	authAgent          *auth.AuthAgent         //Authentication agent
-	tlsCertManager     *tlscert.Manager        //TLS / SSL management
-	redirectTable      *redirection.RuleTable  //Handle special redirection rule sets
-	pathRuleHandler    *pathrule.Handler       //Handle specific path blocking or custom headers
-	geodbStore         *geodb.Store            //GeoIP database, for resolving IP into country code
-	accessController   *access.Controller      //Access controller, handle black list and white list
-	netstatBuffers     *netstat.NetStatBuffers //Realtime graph buffers
-	statisticCollector *statistic.Collector    //Collecting statistic from visitors
-	uptimeMonitor      *uptime.Monitor         //Uptime monitor service worker
-	mdnsScanner        *mdns.MDNSHost          //mDNS discovery services
-	ganManager         *ganserv.NetworkManager //Global Area Network Manager
-	webSshManager      *sshprox.Manager        //Web SSH connection service
-	streamProxyManager *streamproxy.Manager    //Stream Proxy Manager for TCP / UDP forwarding
-	acmeHandler        *acme.ACMEHandler       //Handler for ACME Certificate renew
-	acmeAutoRenewer    *acme.AutoRenewer       //Handler for ACME auto renew ticking
-	staticWebServer    *webserv.WebServer      //Static web server for hosting simple stuffs
-	forwardProxy       *forwardproxy.Handler   //HTTP Forward proxy, basically VPN for web browser
-
-	//Helper modules
-	EmailSender      *email.Sender        //Email sender that handle email sending
-	AnalyticLoader   *analytic.DataLoader //Data loader for Zoraxy Analytic
-	SystemWideLogger *logger.Logger       //Logger for Zoraxy
-)
-
-// Kill signal handler. Do something before the system the core terminate.
+/* SIGTERM handler, do shutdown sequences before closing */
 func SetupCloseHandler() {
 	c := make(chan os.Signal, 2)
-	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
 		<-c
 		ShutdownSeq()
@@ -102,47 +59,55 @@ func SetupCloseHandler() {
 	}()
 }
 
-func ShutdownSeq() {
-	fmt.Println("- Shutting down " + name)
-	fmt.Println("- Closing GeoDB ")
-	geodbStore.Close()
-	fmt.Println("- Closing Netstats Listener")
-	netstatBuffers.Close()
-	fmt.Println("- Closing Statistic Collector")
-	statisticCollector.Close()
-	if mdnsTickerStop != nil {
-		fmt.Println("- Stopping mDNS Discoverer (might take a few minutes)")
-		// Stop the mdns service
-		mdnsTickerStop <- true
-	}
-
-	mdnsScanner.Close()
-	fmt.Println("- Closing Certificates Auto Renewer")
-	acmeAutoRenewer.Close()
-	//Remove the tmp folder
-	fmt.Println("- Cleaning up tmp files")
-	os.RemoveAll("./tmp")
-
-	fmt.Println("- Closing system wide logger")
-	SystemWideLogger.Close()
-
-	//Close database, final
-	fmt.Println("- Stopping system database")
-	sysdb.Close()
-}
-
 func main() {
 	//Parse startup flags
 	flag.Parse()
+
+	//Initialize path variables from flags
+	TMP_FOLDER = *path_tmp
+	CONF_FOLDER = *path_conf
+	CONF_HTTP_PROXY = CONF_FOLDER + "/proxy"
+	CONF_STREAM_PROXY = CONF_FOLDER + "/streamproxy"
+	CONF_CERT_STORE = CONF_FOLDER + "/certs"
+	CONF_REDIRECTION = CONF_FOLDER + "/redirect"
+	CONF_ACCESS_RULE = CONF_FOLDER + "/access"
+	CONF_PATH_RULE = CONF_FOLDER + "/rules/pathrules"
+	CONF_PLUGIN_GROUPS = CONF_FOLDER + "/plugin_groups.json"
+	CONF_GEODB_PATH = CONF_FOLDER + "/geodb"
+	CONF_LOG_CONFIG = CONF_FOLDER + "/log_conf.json"
+	ACME_AUTORENEW_CONFIG_PATH = CONF_FOLDER + "/acme_conf.json"
+	CONF_TRUSTED_PROXIES = CONF_FOLDER + "/trusted_proxies.json"
+
+	/* Maintaince Function Modes */
 	if *showver {
-		fmt.Println(name + " - Version " + version)
+		fmt.Println(SYSTEM_NAME + " - Version " + SYSTEM_VERSION)
 		os.Exit(0)
+	}
+	if *geoDbUpdate {
+		geodb.DownloadGeoDBUpdate(CONF_GEODB_PATH)
+		os.Exit(0)
+	}
+	if *reset_account {
+		//Reset admin account by removing all users from the system
+		auth.ResetAccount(databaseBackend, path_database)
+		os.Exit(0)
+	}
+
+	/* Main Zoraxy Routines */
+	if !utils.ValidateListeningAddress(*webUIPort) {
+		fmt.Println("Malformed -port (listening address) paramter. Do you mean -port=:" + *webUIPort + "?")
+		os.Exit(0)
+	}
+
+	if *enableAutoUpdate {
+		fmt.Println("Checking required config update")
+		update.RunConfigUpdate(0, update.GetVersionIntFromVersionNumber(SYSTEM_VERSION))
 	}
 
 	SetupCloseHandler()
 
 	//Read or create the system uuid
-	uuidRecord := "./sys.uuid"
+	uuidRecord := *path_uuid
 	if !utils.FileExists(uuidRecord) {
 		newSystemUUID := uuid.New().String()
 		os.WriteFile(uuidRecord, []byte(newSystemUUID), 0775)
@@ -154,28 +119,52 @@ func main() {
 	}
 	nodeUUID = string(uuidBytes)
 
-	//Startup all modules
+	//Create a new webmin mux, plugin mux and csrf middleware layer
+	webminPanelMux = http.NewServeMux()
+	pluginAPIMux := http.NewServeMux()
+	csrfMiddleware = csrf.Protect(
+		[]byte(nodeUUID),
+		csrf.CookieName(CSRF_COOKIENAME),
+		csrf.Secure(false),
+		csrf.Path("/"),
+		csrf.SameSite(csrf.SameSiteLaxMode),
+	)
+
+	//Startup all modules, see start.go
 	startupSequence()
 
-	//Initiate management interface APIs
+	//Initiate APIs
 	requireAuth = !(*noauth)
-	initAPIs()
+	initAPIs(webminPanelMux)
+	initRestAPI(pluginAPIMux)
 
-	//Start the reverse proxy server in go routine
+	// Create a entry mux to accept all management interface requests
+	entryMux := http.NewServeMux()
+	entryMux.Handle("/plugin/", pluginAPIMux)            //For plugins API access
+	entryMux.Handle("/", csrfMiddleware(webminPanelMux)) //For webmin UI access, require csrf token
+
+	// Start the reverse proxy server in go routine
 	go func() {
-		ReverseProxtInit()
+		ReverseProxyInit()
 	}()
 
-	time.Sleep(500 * time.Millisecond)
+	// Wait for dynamicProxyRouter to be initialized before proceeding
+	// See ReverseProxyInit() in reverseproxy.go
+	<-dynamicProxyRouterReady
 
 	//Start the finalize sequences
 	finalSequence()
 
-	SystemWideLogger.Println("Zoraxy started. Visit control panel at http://localhost" + *webUIPort)
-	err = http.ListenAndServe(*webUIPort, nil)
+	if strings.HasPrefix(*webUIPort, ":") {
+		//Bind to all interfaces, issue #672
+		SystemWideLogger.Println(SYSTEM_NAME + " started. Visit control panel at http://localhost" + *webUIPort)
+	} else {
+		SystemWideLogger.Println(SYSTEM_NAME + " started. Visit control panel at http://" + *webUIPort)
+	}
+
+	err = http.ListenAndServe(*webUIPort, entryMux)
 
 	if err != nil {
 		log.Fatal(err)
 	}
-
 }

@@ -1,7 +1,10 @@
 package dpcore
 
 import (
+	"bytes"
+	"io"
 	"net"
+	"net/http"
 	"net/url"
 	"strings"
 )
@@ -28,12 +31,38 @@ func replaceLocationHost(urlString string, rrr *ResponseRewriteRuleSet, useTLS b
 	//like news.example.com.
 	// The later check bypass apache screw up method of redirection header
 	// e.g. https://imuslab.com -> http://imuslab.com:443
-	if rrr.ProxyDomain != u.Host && !strings.Contains(u.Host, rrr.OriginalHost+":") {
+	if rrr.ProxyDomain != u.Host && u.Host != rrr.OriginalHost && !strings.Contains(u.Host, rrr.OriginalHost+":") {
 		//New location domain not matching proxy target domain.
 		//Do not modify location header
 		return urlString, nil
 	}
-	u.Host = rrr.OriginalHost
+
+	//Issue #626: Check if the location header is another subdomain with port
+	//E.g. Proxy config: blog.example.com -> 127.0.0.1:80
+	//Check if it is actually redirecting to (*.)blog.example.com:8080 instead of current domain
+	//like Location: http://x.blog.example.com:1234/
+	_, newLocationPort, err := net.SplitHostPort(u.Host)
+	if (newLocationPort == "80" || newLocationPort == "443") && err == nil {
+		//Port 80 or 443, some web server use this to switch between http and https
+		//E.g. http://example.com:80 -> https://example.com:443
+		//E.g. http://example.com:443 -> https://example.com:80
+		//That usually means the user have invalidly configured the web server to use port 80 or 443
+		//for http or https. We should not modify the location header in this case.
+
+	} else if strings.Contains(u.Host, ":") && err == nil && u.Host != rrr.ProxyDomain {
+		//Other port numbers and different host from proxy target. Do not modify location header
+		return urlString, nil
+	}
+
+	// Handle case where OriginalHost contains a path component (e.g., "proxy.example.com/blog")
+	// In this case, the path component must be prepended to the URL path rather than
+	// set as part of the host (which would cause URL encoding to escape the slash as %2F)
+	if idx := strings.IndexByte(rrr.OriginalHost, '/'); idx != -1 {
+		u.Host = rrr.OriginalHost[:idx]
+		u.Path = rrr.OriginalHost[idx:] + u.Path
+	} else {
+		u.Host = rrr.OriginalHost
+	}
 
 	if strings.Contains(rrr.ProxyDomain, "/") {
 		//The proxy domain itself seems contain subpath.
@@ -57,7 +86,7 @@ func replaceLocationHost(urlString string, rrr *ResponseRewriteRuleSet, useTLS b
 	return u.String(), nil
 }
 
-// Debug functions
+// Debug functions for replaceLocationHost
 func ReplaceLocationHost(urlString string, rrr *ResponseRewriteRuleSet, useTLS bool) (string, error) {
 	return replaceLocationHost(urlString, rrr, useTLS)
 }
@@ -91,4 +120,64 @@ func isExternalDomainName(hostname string) bool {
 	}
 
 	return true
+}
+
+// DeepCopyRequest returns a deep copy of the given http.Request.
+func DeepCopyRequest(req *http.Request) (*http.Request, error) {
+	// Copy the URL
+	urlCopy := *req.URL
+
+	// Copy the headers
+	headersCopy := make(http.Header, len(req.Header))
+	for k, vv := range req.Header {
+		vvCopy := make([]string, len(vv))
+		copy(vvCopy, vv)
+		headersCopy[k] = vvCopy
+	}
+
+	// Copy the cookies
+	cookiesCopy := make([]*http.Cookie, len(req.Cookies()))
+	for i, cookie := range req.Cookies() {
+		cookieCopy := *cookie
+		cookiesCopy[i] = &cookieCopy
+	}
+
+	// Copy the body, if present
+	var bodyCopy io.ReadCloser
+	if req.Body != nil {
+		var buf bytes.Buffer
+		if _, err := buf.ReadFrom(req.Body); err != nil {
+			return nil, err
+		}
+		// Reset the request body so it can be read again
+		if err := req.Body.Close(); err != nil {
+			return nil, err
+		}
+		req.Body = io.NopCloser(&buf)
+		bodyCopy = io.NopCloser(bytes.NewReader(buf.Bytes()))
+	}
+
+	// Create the new request
+	reqCopy := &http.Request{
+		Method:           req.Method,
+		URL:              &urlCopy,
+		Proto:            req.Proto,
+		ProtoMajor:       req.ProtoMajor,
+		ProtoMinor:       req.ProtoMinor,
+		Header:           headersCopy,
+		Body:             bodyCopy,
+		ContentLength:    req.ContentLength,
+		TransferEncoding: append([]string(nil), req.TransferEncoding...),
+		Close:            req.Close,
+		Host:             req.Host,
+		Form:             req.Form,
+		PostForm:         req.PostForm,
+		MultipartForm:    req.MultipartForm,
+		Trailer:          req.Trailer,
+		RemoteAddr:       req.RemoteAddr,
+		TLS:              req.TLS,
+		// Cancel and Context are not copied as it might cause issues
+	}
+
+	return reqCopy, nil
 }

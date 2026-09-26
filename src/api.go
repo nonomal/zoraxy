@@ -2,12 +2,17 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/pprof"
 
 	"imuslab.com/zoraxy/mod/acme/acmedns"
 	"imuslab.com/zoraxy/mod/acme/acmewizard"
 	"imuslab.com/zoraxy/mod/auth"
+	"imuslab.com/zoraxy/mod/dynamicproxy/domainsniff"
+	"imuslab.com/zoraxy/mod/info/hardwareinfo"
+	"imuslab.com/zoraxy/mod/ipscan"
 	"imuslab.com/zoraxy/mod/netstat"
 	"imuslab.com/zoraxy/mod/netutils"
 	"imuslab.com/zoraxy/mod/utils"
@@ -18,129 +23,204 @@ import (
 
 	This file contains all the API called by the web management interface
 
+	**Important Notes**
+	If you are adding new plugin api, add them in plugin_api.go instead of this file
 */
 
-var requireAuth = true
-
-func initAPIs() {
-
-	authRouter := auth.NewManagedHTTPRouter(auth.RouterOption{
-		AuthAgent:   authAgent,
-		RequireAuth: requireAuth,
-		DeniedHandler: func(w http.ResponseWriter, r *http.Request) {
-			http.Error(w, "401 - Unauthorized", http.StatusUnauthorized)
-		},
-	})
-
-	//Register the standard web services urls
-	fs := http.FileServer(http.FS(webres))
-	if development {
-		fs = http.FileServer(http.Dir("web/"))
-	}
-	//Add a layer of middleware for advance  control
-	advHandler := FSHandler(fs)
-	http.Handle("/", advHandler)
-
-	//Authentication APIs
-	registerAuthAPIs(requireAuth)
-
-	//Reverse proxy
+// Register the APIs for HTTP proxy management functions
+func RegisterHTTPProxyAPIs(authRouter *auth.RouterDef) {
+	/* Reverse Proxy Settings & Status */
 	authRouter.HandleFunc("/api/proxy/enable", ReverseProxyHandleOnOff)
 	authRouter.HandleFunc("/api/proxy/add", ReverseProxyHandleAddEndpoint)
 	authRouter.HandleFunc("/api/proxy/status", ReverseProxyStatus)
 	authRouter.HandleFunc("/api/proxy/toggle", ReverseProxyToggleRuleSet)
 	authRouter.HandleFunc("/api/proxy/list", ReverseProxyList)
+	authRouter.HandleFunc("/api/proxy/listTags", ReverseProxyListTags)
 	authRouter.HandleFunc("/api/proxy/detail", ReverseProxyListDetail)
 	authRouter.HandleFunc("/api/proxy/edit", ReverseProxyHandleEditEndpoint)
+	authRouter.HandleFunc("/api/proxy/setTags", ReverseProxyHandleSetTags)
 	authRouter.HandleFunc("/api/proxy/setAlias", ReverseProxyHandleAlias)
+	authRouter.HandleFunc("/api/proxy/setTlsConfig", ReverseProxyHandleSetTlsConfig)
+	authRouter.HandleFunc("/api/proxy/setHostname", ReverseProxyHandleSetHostname)
 	authRouter.HandleFunc("/api/proxy/del", DeleteProxyEndpoint)
 	authRouter.HandleFunc("/api/proxy/updateCredentials", UpdateProxyBasicAuthCredentials)
-	authRouter.HandleFunc("/api/proxy/tlscheck", HandleCheckSiteSupportTLS)
+	authRouter.HandleFunc("/api/proxy/listeningPorts/get", HandleGetListeningPorts)
+	authRouter.HandleFunc("/api/proxy/listeningPorts/set", HandleSetListeningPorts)
+	authRouter.HandleFunc("/api/proxy/listeningPorts/list", HandleListSecondaryListeners)
+	authRouter.HandleFunc("/api/proxy/tlscheck", domainsniff.HandleCheckSiteSupportTLS)
 	authRouter.HandleFunc("/api/proxy/setIncoming", HandleIncomingPortSet)
 	authRouter.HandleFunc("/api/proxy/useHttpsRedirect", HandleUpdateHttpsRedirect)
 	authRouter.HandleFunc("/api/proxy/listenPort80", HandleUpdatePort80Listener)
 	authRouter.HandleFunc("/api/proxy/requestIsProxied", HandleManagementProxyCheck)
 	authRouter.HandleFunc("/api/proxy/developmentMode", HandleDevelopmentModeChange)
-	//Reverse proxy virtual directory APIs
+	authRouter.HandleFunc("/api/proxy/proxyProtocol", HandleProxyProtocolChange)
+	authRouter.HandleFunc("/api/proxy/quic", HandleQuicToggle)
+	authRouter.HandleFunc("/api/proxy/timeouts", HandleGlobalProxyTimeoutSettings)
+	/* Reverse proxy upstream (load balance) */
+	authRouter.HandleFunc("/api/proxy/upstream/list", ReverseProxyUpstreamList)
+	authRouter.HandleFunc("/api/proxy/upstream/add", ReverseProxyUpstreamAdd)
+	authRouter.HandleFunc("/api/proxy/upstream/setPriority", ReverseProxyUpstreamSetPriority)
+	authRouter.HandleFunc("/api/proxy/upstream/update", ReverseProxyUpstreamUpdate)
+	authRouter.HandleFunc("/api/proxy/upstream/remove", ReverseProxyUpstreamDelete)
+	/* Reverse proxy virtual directory */
 	authRouter.HandleFunc("/api/proxy/vdir/list", ReverseProxyListVdir)
 	authRouter.HandleFunc("/api/proxy/vdir/add", ReverseProxyAddVdir)
 	authRouter.HandleFunc("/api/proxy/vdir/del", ReverseProxyDeleteVdir)
 	authRouter.HandleFunc("/api/proxy/vdir/edit", ReverseProxyEditVdir)
-	//Reverse proxy user define header apis
+	authRouter.HandleFunc("/api/proxy/vdir/bulkForwardAuth", ReverseProxyBulkApplyVdirByForwardAuth)
+	/* Reverse proxy user-defined header */
 	authRouter.HandleFunc("/api/proxy/header/list", HandleCustomHeaderList)
 	authRouter.HandleFunc("/api/proxy/header/add", HandleCustomHeaderAdd)
 	authRouter.HandleFunc("/api/proxy/header/remove", HandleCustomHeaderRemove)
-	//Reverse proxy auth related APIs
+	authRouter.HandleFunc("/api/proxy/header/handleHSTS", HandleHSTSState)
+	authRouter.HandleFunc("/api/proxy/header/handleHopByHop", HandleHopByHop)
+	authRouter.HandleFunc("/api/proxy/header/handleUserAgent", HandleUserAgent)
+	authRouter.HandleFunc("/api/proxy/header/handleHostOverwrite", HandleHostOverwrite)
+	authRouter.HandleFunc("/api/proxy/header/handlePermissionPolicy", HandlePermissionPolicy)
+	authRouter.HandleFunc("/api/proxy/header/handleWsHeaderBehavior", HandleWsHeaderBehavior)
+	/* Reverse proxy auth related */
 	authRouter.HandleFunc("/api/proxy/auth/exceptions/list", ListProxyBasicAuthExceptionPaths)
 	authRouter.HandleFunc("/api/proxy/auth/exceptions/add", AddProxyBasicAuthExceptionPaths)
 	authRouter.HandleFunc("/api/proxy/auth/exceptions/delete", RemoveProxyBasicAuthExceptionPaths)
+	/* ZorxAuth SSO per-endpoint exception rules */
+	authRouter.HandleFunc("/api/proxy/auth/zorxauth/exceptions/list", ListProxyZorxAuthExceptionRules)
+	authRouter.HandleFunc("/api/proxy/auth/zorxauth/exceptions/add", AddProxyZorxAuthExceptionRule)
+	authRouter.HandleFunc("/api/proxy/auth/zorxauth/exceptions/delete", RemoveProxyZorxAuthExceptionRule)
+}
 
-	//TLS / SSL config
+// Register the APIs for TLS / SSL certificate management functions
+func RegisterTLSAPIs(authRouter *auth.RouterDef) {
+	//Global certificate settings
 	authRouter.HandleFunc("/api/cert/tls", handleToggleTLSProxy)
-	authRouter.HandleFunc("/api/cert/tlsRequireLatest", handleSetTlsRequireLatest)
-	authRouter.HandleFunc("/api/cert/upload", handleCertUpload)
-	authRouter.HandleFunc("/api/cert/list", handleListCertificate)
-	authRouter.HandleFunc("/api/cert/listdomains", handleListDomains)
-	authRouter.HandleFunc("/api/cert/checkDefault", handleDefaultCertCheck)
-	authRouter.HandleFunc("/api/cert/delete", handleCertRemove)
+	authRouter.HandleFunc("/api/cert/tlsMinVersion", handleSetTlsMinVersion)
+	authRouter.HandleFunc("/api/cert/resolve", handleCertTryResolve)
+	authRouter.HandleFunc("/api/cert/setPreferredCertificate", handleSetDomainPreferredCertificate)
 
-	//Redirection config
+	//Certificate store functions
+	authRouter.HandleFunc("/api/cert/setDefault", tlsCertManager.SetCertAsDefault)
+	authRouter.HandleFunc("/api/cert/getCommonName", tlsCertManager.HandleGetCertCommonName)
+	authRouter.HandleFunc("/api/cert/upload", tlsCertManager.HandleCertUpload)
+	authRouter.HandleFunc("/api/cert/download", tlsCertManager.HandleCertDownload)
+	authRouter.HandleFunc("/api/cert/list", tlsCertManager.HandleListCertificate)
+	authRouter.HandleFunc("/api/cert/listdomains", tlsCertManager.HandleListDomains)
+	authRouter.HandleFunc("/api/cert/checkDefault", tlsCertManager.HandleDefaultCertCheck)
+	authRouter.HandleFunc("/api/cert/delete", tlsCertManager.HandleCertRemove)
+	authRouter.HandleFunc("/api/cert/selfsign", tlsCertManager.HandleSelfSignCertGenerate)
+}
+
+// Register the APIs for Authentication handlers like Forward Auth and OAUTH2
+func RegisterAuthenticationHandlerAPIs(authRouter *auth.RouterDef) {
+	authRouter.HandleFunc("/api/sso/forward-auth", forwardAuthRouter.HandleAPIOptions)
+	authRouter.HandleFunc("/api/sso/OAuth2", oauth2Router.HandleSetOAuth2Settings)
+	authRouter.HandleFunc("/api/sso/zorxauth/provider", zorxAuthRouter.HandleAuthProviderSettings)
+	authRouter.HandleFunc("/api/sso/zorxauth/gateway", zorxAuthRouter.HandleGatewaySettings)
+
+	// Login page branding customization
+	authRouter.HandleFunc("/api/sso/zorxauth/customization", zorxAuthRouter.HandleCustomizationSettings)
+	authRouter.HandleFunc("/api/sso/zorxauth/customization/upload", zorxAuthRouter.HandleCustomizationUpload)
+	authRouter.HandleFunc("/api/sso/zorxauth/customization/reset", zorxAuthRouter.HandleCustomizationReset)
+	authRouter.HandleFunc("/api/sso/zorxauth/customization/preview", zorxAuthRouter.HandleCustomizationPreview)
+}
+
+// Register ZorxAuth user management APIs separately from generic SSO provider settings routes
+func RegisterZorxAuthUserManagementAPIs(authRouter *auth.RouterDef) {
+	authRouter.HandleFunc("/api/sso/zorxauth/users/list", zorxAuthRouter.HandleUsersList)
+	authRouter.HandleFunc("/api/sso/zorxauth/users/create", zorxAuthRouter.HandleUserCreate)
+	authRouter.HandleFunc("/api/sso/zorxauth/users/update", zorxAuthRouter.HandleUserUpdate)
+	authRouter.HandleFunc("/api/sso/zorxauth/users/delete", zorxAuthRouter.HandleUserDelete)
+	authRouter.HandleFunc("/api/sso/zorxauth/users/logoutAll", zorxAuthRouter.HandleLogoutAllUsers)
+	authRouter.HandleFunc("/api/sso/zorxauth/users/disable2fa", zorxAuthRouter.HandleDisableUserTOTP)
+
+	// Group Policy management
+	authRouter.HandleFunc("/api/sso/zorxauth/grouppolicy/list", zorxAuthRouter.HandleGroupPolicyList)
+	authRouter.HandleFunc("/api/sso/zorxauth/grouppolicy/create", zorxAuthRouter.HandleGroupPolicyCreate)
+	authRouter.HandleFunc("/api/sso/zorxauth/grouppolicy/update", zorxAuthRouter.HandleGroupPolicyUpdate)
+	authRouter.HandleFunc("/api/sso/zorxauth/grouppolicy/delete", zorxAuthRouter.HandleGroupPolicyDelete)
+}
+
+// Register the APIs for redirection rules management functions
+func RegisterRedirectionAPIs(authRouter *auth.RouterDef) {
 	authRouter.HandleFunc("/api/redirect/list", handleListRedirectionRules)
 	authRouter.HandleFunc("/api/redirect/add", handleAddRedirectionRule)
 	authRouter.HandleFunc("/api/redirect/delete", handleDeleteRedirectionRule)
+	authRouter.HandleFunc("/api/redirect/edit", handleEditRedirectionRule)
+	authRouter.HandleFunc("/api/redirect/toggle", handleToggleRedirectionRuleEnable)
 	authRouter.HandleFunc("/api/redirect/regex", handleToggleRedirectRegexpSupport)
+	authRouter.HandleFunc("/api/redirect/case_sensitive", handleToggleRedirectCaseSensitivity)
+}
 
-	//Access Rules API
+// Register the APIs for access rules management functions
+func RegisterAccessRuleAPIs(authRouter *auth.RouterDef) {
+	/* Access Rules Settings & Status */
 	authRouter.HandleFunc("/api/access/list", handleListAccessRules)
 	authRouter.HandleFunc("/api/access/attach", handleAttachRuleToHost)
 	authRouter.HandleFunc("/api/access/create", handleCreateAccessRule)
 	authRouter.HandleFunc("/api/access/remove", handleRemoveAccessRule)
 	authRouter.HandleFunc("/api/access/update", handleUpadateAccessRule)
-	//Blacklist APIs
+	/* Blacklist */
 	authRouter.HandleFunc("/api/blacklist/list", handleListBlacklisted)
 	authRouter.HandleFunc("/api/blacklist/country/add", handleCountryBlacklistAdd)
 	authRouter.HandleFunc("/api/blacklist/country/remove", handleCountryBlacklistRemove)
 	authRouter.HandleFunc("/api/blacklist/ip/add", handleIpBlacklistAdd)
 	authRouter.HandleFunc("/api/blacklist/ip/remove", handleIpBlacklistRemove)
 	authRouter.HandleFunc("/api/blacklist/enable", handleBlacklistEnable)
-	//Whitelist APIs
+	/* Whitelist */
 	authRouter.HandleFunc("/api/whitelist/list", handleListWhitelisted)
 	authRouter.HandleFunc("/api/whitelist/country/add", handleCountryWhitelistAdd)
 	authRouter.HandleFunc("/api/whitelist/country/remove", handleCountryWhitelistRemove)
 	authRouter.HandleFunc("/api/whitelist/ip/add", handleIpWhitelistAdd)
 	authRouter.HandleFunc("/api/whitelist/ip/remove", handleIpWhitelistRemove)
 	authRouter.HandleFunc("/api/whitelist/enable", handleWhitelistEnable)
+	authRouter.HandleFunc("/api/whitelist/allowLocal", handleWhitelistAllowLoopback)
+	authRouter.HandleFunc("/api/whitelist/trustProxy", handleWhitelistTrustProxy)
+	/* Quick Ban List */
+	authRouter.HandleFunc("/api/quickban/list", handleListQuickBan)
+	/* Trusted Proxies */
+	authRouter.HandleFunc("/api/trustedproxy/list", handleListTrustedProxies)
+	authRouter.HandleFunc("/api/trustedproxy/add", handleAddTrustedProxy)
+	authRouter.HandleFunc("/api/trustedproxy/remove", handleRemoveTrustedProxy)
+	authRouter.HandleFunc("/api/trustedproxy/update", handleUpdateTrustedProxy)
+	authRouter.HandleFunc("/api/trustedproxy/bulkUpdate", handleBulkUpdateTrustedProxies)
+	authRouter.HandleFunc("/api/trustedproxy/reset", handleResetDefaultTrustedProxies)
+}
 
-	//Path Blocker APIs
+// Register the APIs for path blocking rules management functions, WIP
+func RegisterPathRuleAPIs(authRouter *auth.RouterDef) {
 	authRouter.HandleFunc("/api/pathrule/add", pathRuleHandler.HandleAddBlockingPath)
 	authRouter.HandleFunc("/api/pathrule/list", pathRuleHandler.HandleListBlockingPath)
 	authRouter.HandleFunc("/api/pathrule/remove", pathRuleHandler.HandleRemoveBlockingPath)
+}
 
-	//Statistic & uptime monitoring API
+// Register the APIs statistic anlysis and uptime monitoring functions
+func RegisterStatisticalAPIs(authRouter *auth.RouterDef) {
+	/* Traffic Summary */
 	authRouter.HandleFunc("/api/stats/summary", statisticCollector.HandleTodayStatLoad)
+	authRouter.HandleFunc("/api/stats/overview", HandleDashboardOverview)
+	authRouter.HandleFunc("/api/stats/trafficmap", HandleTrafficMapData)
 	authRouter.HandleFunc("/api/stats/countries", HandleCountryDistrSummary)
-	authRouter.HandleFunc("/api/stats/netstat", netstat.HandleGetNetworkInterfaceStats)
+	authRouter.HandleFunc("/api/stats/netstat", netstatBuffers.HandleGetNetworkInterfaceStats)
 	authRouter.HandleFunc("/api/stats/netstatgraph", netstatBuffers.HandleGetBufferedNetworkInterfaceStats)
 	authRouter.HandleFunc("/api/stats/listnic", netstat.HandleListNetworkInterfaces)
+	/* Host System Information */
+	authRouter.HandleFunc("/api/stats/system", HandleSystemResourceUsage)
+	authRouter.HandleFunc("/api/sysinfo/cpu", hardwareinfo.CachedGetCPUInfo)
+	authRouter.HandleFunc("/api/sysinfo/ram", hardwareinfo.CachedGetRamInfo)
+	authRouter.HandleFunc("/api/sysinfo/drives", hardwareinfo.CachedGetDriveStat)
+	authRouter.HandleFunc("/api/sysinfo/nic", hardwareinfo.CachedIfconfig)
+	authRouter.HandleFunc("/api/sysinfo/usb", hardwareinfo.CachedGetUSB)
+	/* Zoraxy Analytic */
+	authRouter.HandleFunc("/api/analytic/list", AnalyticLoader.HandleSummaryList)
+	authRouter.HandleFunc("/api/analytic/load", AnalyticLoader.HandleLoadTargetDaySummary)
+	authRouter.HandleFunc("/api/analytic/loadRange", AnalyticLoader.HandleLoadTargetRangeSummary)
+	authRouter.HandleFunc("/api/analytic/exportRange", AnalyticLoader.HandleRangeExport)
+	authRouter.HandleFunc("/api/analytic/resetRange", AnalyticLoader.HandleRangeReset)
+	authRouter.HandleFunc("/api/analytic/resetAll", AnalyticLoader.HandleResetAllStats)
+	/* UpTime Monitor */
 	authRouter.HandleFunc("/api/utm/list", HandleUptimeMonitorListing)
+}
 
-	//Global Area Network APIs
-	authRouter.HandleFunc("/api/gan/network/info", ganManager.HandleGetNodeID)
-	authRouter.HandleFunc("/api/gan/network/add", ganManager.HandleAddNetwork)
-	authRouter.HandleFunc("/api/gan/network/remove", ganManager.HandleRemoveNetwork)
-	authRouter.HandleFunc("/api/gan/network/list", ganManager.HandleListNetwork)
-	authRouter.HandleFunc("/api/gan/network/name", ganManager.HandleNetworkNaming)
-	//authRouter.HandleFunc("/api/gan/network/detail", ganManager.HandleNetworkDetails)
-	authRouter.HandleFunc("/api/gan/network/setRange", ganManager.HandleSetRanges)
-	authRouter.HandleFunc("/api/gan/network/join", ganManager.HandleServerJoinNetwork)
-	authRouter.HandleFunc("/api/gan/network/leave", ganManager.HandleServerLeaveNetwork)
-	authRouter.HandleFunc("/api/gan/members/list", ganManager.HandleMemberList)
-	authRouter.HandleFunc("/api/gan/members/ip", ganManager.HandleMemberIP)
-	authRouter.HandleFunc("/api/gan/members/name", ganManager.HandleMemberNaming)
-	authRouter.HandleFunc("/api/gan/members/authorize", ganManager.HandleMemberAuthorization)
-	authRouter.HandleFunc("/api/gan/members/delete", ganManager.HandleMemberDelete)
-
-	//TCP Proxy
+// Register the APIs for Stream (TCP / UDP) Proxy management functions
+func RegisterStreamProxyAPIs(authRouter *auth.RouterDef) {
 	authRouter.HandleFunc("/api/streamprox/config/add", streamProxyManager.HandleAddProxyConfig)
 	authRouter.HandleFunc("/api/streamprox/config/edit", streamProxyManager.HandleEditProxyConfigs)
 	authRouter.HandleFunc("/api/streamprox/config/list", streamProxyManager.HandleListConfigs)
@@ -148,121 +228,134 @@ func initAPIs() {
 	authRouter.HandleFunc("/api/streamprox/config/stop", streamProxyManager.HandleStopProxy)
 	authRouter.HandleFunc("/api/streamprox/config/delete", streamProxyManager.HandleRemoveProxy)
 	authRouter.HandleFunc("/api/streamprox/config/status", streamProxyManager.HandleGetProxyStatus)
+}
 
-	//mDNS APIs
+// Register the APIs for mDNS service management functions
+func RegisterMDNSAPIs(authRouter *auth.RouterDef) {
 	authRouter.HandleFunc("/api/mdns/list", HandleMdnsListing)
 	authRouter.HandleFunc("/api/mdns/discover", HandleMdnsScanning)
+}
 
-	//Zoraxy Analytic
-	authRouter.HandleFunc("/api/analytic/list", AnalyticLoader.HandleSummaryList)
-	authRouter.HandleFunc("/api/analytic/load", AnalyticLoader.HandleLoadTargetDaySummary)
-	authRouter.HandleFunc("/api/analytic/loadRange", AnalyticLoader.HandleLoadTargetRangeSummary)
-	authRouter.HandleFunc("/api/analytic/exportRange", AnalyticLoader.HandleRangeExport)
-	authRouter.HandleFunc("/api/analytic/resetRange", AnalyticLoader.HandleRangeReset)
+// Register the APIs for ACME and Auto Renewer management functions
+func RegisterACMEAndAutoRenewerAPIs(authRouter *auth.RouterDef) {
+	/* ACME Core */
+	authRouter.HandleFunc("/api/acme/listExpiredDomains", acmeHandler.HandleGetExpiredDomains)
+	authRouter.HandleFunc("/api/acme/obtainCert", AcmeCheckAndHandleRenewCertificate)
+	/* Auto Renewer */
+	authRouter.HandleFunc("/api/acme/autoRenew/enable", acmeAutoRenewer.HandleAutoRenewEnable)
+	authRouter.HandleFunc("/api/acme/autoRenew/ca", HandleACMEPreferredCA)
+	authRouter.HandleFunc("/api/acme/autoRenew/email", acmeAutoRenewer.HandleACMEEmail)
+	authRouter.HandleFunc("/api/acme/autoRenew/setDomains", acmeAutoRenewer.HandleSetAutoRenewDomains)
+	authRouter.HandleFunc("/api/acme/autoRenew/setEAB", acmeAutoRenewer.HanldeSetEAB)
+	authRouter.HandleFunc("/api/acme/autoRenew/setDNS", acmeAutoRenewer.HandleSetDNS)
+	authRouter.HandleFunc("/api/acme/autoRenew/listDomains", acmeAutoRenewer.HandleLoadAutoRenewDomains)
+	authRouter.HandleFunc("/api/acme/autoRenew/renewPolicy", acmeAutoRenewer.HandleRenewPolicy)
+	authRouter.HandleFunc("/api/acme/autoRenew/renewNow", acmeAutoRenewer.HandleRenewNow)
+	authRouter.HandleFunc("/api/acme/dns/providers", acmedns.HandleServeProvidersJson)
+	/* ACME Wizard */
+	authRouter.HandleFunc("/api/acme/wizard", acmewizard.HandleGuidedStepCheck)
+}
 
-	//Network utilities
-	authRouter.HandleFunc("/api/tools/ipscan", HandleIpScan)
+// Register the APIs for Static Web Server management functions
+func RegisterStaticWebServerAPIs(authRouter *auth.RouterDef) {
+	/* Static Web Server Controls */
+	authRouter.HandleFunc("/api/webserv/status", staticWebServer.HandleGetStatus)
+	authRouter.HandleFunc("/api/webserv/start", staticWebServer.HandleStartServer)
+	authRouter.HandleFunc("/api/webserv/stop", staticWebServer.HandleStopServer)
+	authRouter.HandleFunc("/api/webserv/setPort", HandleStaticWebServerPortChange)
+	authRouter.HandleFunc("/api/webserv/setDirList", staticWebServer.SetEnableDirectoryListing)
+	authRouter.HandleFunc("/api/webserv/disableListenAllInterface", staticWebServer.SetDisableListenToAllInterface)
+
+	/* WebDAV Server Controls */
+	authRouter.HandleFunc("/api/webserv/webdav/start", staticWebServer.HandleStartWebDAV)
+	authRouter.HandleFunc("/api/webserv/webdav/stop", staticWebServer.HandleStopWebDAV)
+	authRouter.HandleFunc("/api/webserv/webdav/setPort", staticWebServer.HandleWebDAVPortChange)
+	authRouter.HandleFunc("/api/webserv/webdav/setUseCustomCredentials", staticWebServer.HandleSetUseCustomCredentials)
+	authRouter.HandleFunc("/api/webserv/webdav/setCustomCredentials", staticWebServer.HandleSetCustomCredentials)
+}
+
+// Register the APIs for Network Utilities functions
+func RegisterNetworkUtilsAPIs(authRouter *auth.RouterDef) {
+	authRouter.HandleFunc("/api/tools/ipscan", ipscan.HandleIpScan)
+	authRouter.HandleFunc("/api/tools/portscan", ipscan.HandleScanPort)
 	authRouter.HandleFunc("/api/tools/traceroute", netutils.HandleTraceRoute)
 	authRouter.HandleFunc("/api/tools/ping", netutils.HandlePing)
 	authRouter.HandleFunc("/api/tools/whois", netutils.HandleWhois)
 	authRouter.HandleFunc("/api/tools/webssh", HandleCreateProxySession)
 	authRouter.HandleFunc("/api/tools/websshSupported", HandleWebSshSupportCheck)
 	authRouter.HandleFunc("/api/tools/wol", HandleWakeOnLan)
-	authRouter.HandleFunc("/api/tools/smtp/get", HandleSMTPGet)
-	authRouter.HandleFunc("/api/tools/smtp/set", HandleSMTPSet)
-	authRouter.HandleFunc("/api/tools/smtp/admin", HandleAdminEmailGet)
-	authRouter.HandleFunc("/api/tools/smtp/test", HandleTestEmailSend)
 	authRouter.HandleFunc("/api/tools/fwdproxy/enable", forwardProxy.HandleToogle)
 	authRouter.HandleFunc("/api/tools/fwdproxy/port", forwardProxy.HandlePort)
-
-	//Account Reset
-	http.HandleFunc("/api/account/reset", HandleAdminAccountResetEmail)
-	http.HandleFunc("/api/account/new", HandleNewPasswordSetup)
-
-	//ACME & Auto Renewer
-	authRouter.HandleFunc("/api/acme/listExpiredDomains", acmeHandler.HandleGetExpiredDomains)
-	authRouter.HandleFunc("/api/acme/obtainCert", AcmeCheckAndHandleRenewCertificate)
-	authRouter.HandleFunc("/api/acme/autoRenew/enable", acmeAutoRenewer.HandleAutoRenewEnable)
-	authRouter.HandleFunc("/api/acme/autoRenew/ca", HandleACMEPreferredCA)
-	authRouter.HandleFunc("/api/acme/autoRenew/email", acmeAutoRenewer.HandleACMEEmail)
-	authRouter.HandleFunc("/api/acme/autoRenew/setDomains", acmeAutoRenewer.HandleSetAutoRenewDomains)
-	authRouter.HandleFunc("/api/acme/autoRenew/setEAB", acmeAutoRenewer.HanldeSetEAB)
-	authRouter.HandleFunc("/api/acme/autoRenew/setDNS", acmeAutoRenewer.HanldeSetDNS)
-	authRouter.HandleFunc("/api/acme/autoRenew/listDomains", acmeAutoRenewer.HandleLoadAutoRenewDomains)
-	authRouter.HandleFunc("/api/acme/autoRenew/renewPolicy", acmeAutoRenewer.HandleRenewPolicy)
-	authRouter.HandleFunc("/api/acme/autoRenew/renewNow", acmeAutoRenewer.HandleRenewNow)
-	authRouter.HandleFunc("/api/acme/dns/providers", acmedns.HandleServeProvidersJson)
-	authRouter.HandleFunc("/api/acme/wizard", acmewizard.HandleGuidedStepCheck) //ACME Wizard
-
-	//Static Web Server
-	authRouter.HandleFunc("/api/webserv/status", staticWebServer.HandleGetStatus)
-	authRouter.HandleFunc("/api/webserv/start", staticWebServer.HandleStartServer)
-	authRouter.HandleFunc("/api/webserv/stop", staticWebServer.HandleStopServer)
-	authRouter.HandleFunc("/api/webserv/setPort", HandleStaticWebServerPortChange)
-	authRouter.HandleFunc("/api/webserv/setDirList", staticWebServer.SetEnableDirectoryListing)
-	if *allowWebFileManager {
-		//Web Directory Manager file operation functions
-		authRouter.HandleFunc("/api/fs/list", staticWebServer.FileManager.HandleList)
-		authRouter.HandleFunc("/api/fs/upload", staticWebServer.FileManager.HandleUpload)
-		authRouter.HandleFunc("/api/fs/download", staticWebServer.FileManager.HandleDownload)
-		authRouter.HandleFunc("/api/fs/newFolder", staticWebServer.FileManager.HandleNewFolder)
-		authRouter.HandleFunc("/api/fs/copy", staticWebServer.FileManager.HandleFileCopy)
-		authRouter.HandleFunc("/api/fs/move", staticWebServer.FileManager.HandleFileMove)
-		authRouter.HandleFunc("/api/fs/properties", staticWebServer.FileManager.HandleFileProperties)
-		authRouter.HandleFunc("/api/fs/del", staticWebServer.FileManager.HandleFileDelete)
-	}
-
-	//Others
-	http.HandleFunc("/api/info/x", HandleZoraxyInfo)
-	authRouter.HandleFunc("/api/info/geoip", HandleGeoIpLookup)
-	authRouter.HandleFunc("/api/conf/export", ExportConfigAsZip)
-	authRouter.HandleFunc("/api/conf/import", ImportConfigFromZip)
-
-	//Debug
-	authRouter.HandleFunc("/api/info/pprof", pprof.Index)
-
-	//If you got APIs to add, append them here
 }
 
-// Function to renders Auth related APIs
-func registerAuthAPIs(requireAuth bool) {
-	//Auth APIs
-	http.HandleFunc("/api/auth/login", authAgent.HandleLogin)
-	http.HandleFunc("/api/auth/logout", authAgent.HandleLogout)
-	http.HandleFunc("/api/auth/checkLogin", func(w http.ResponseWriter, r *http.Request) {
+func RegisterPluginAPIs(authRouter *auth.RouterDef) {
+	authRouter.HandleFunc("/api/plugins/list", pluginManager.HandleListPlugins)
+	authRouter.HandleFunc("/api/plugins/enable", pluginManager.HandleEnablePlugin)
+	authRouter.HandleFunc("/api/plugins/disable", pluginManager.HandleDisablePlugin)
+	authRouter.HandleFunc("/api/plugins/rebuild", pluginManager.HandleRebuildPlugin)
+	authRouter.HandleFunc("/api/plugins/icon", pluginManager.HandleLoadPluginIcon)
+	authRouter.HandleFunc("/api/plugins/info", pluginManager.HandlePluginInfo)
+
+	authRouter.HandleFunc("/api/plugins/groups/list", pluginManager.HandleListPluginGroups)
+	authRouter.HandleFunc("/api/plugins/groups/add", pluginManager.HandleAddPluginToGroup)
+	authRouter.HandleFunc("/api/plugins/groups/remove", pluginManager.HandleRemovePluginFromGroup)
+	authRouter.HandleFunc("/api/plugins/groups/deleteTag", pluginManager.HandleRemovePluginGroup)
+
+	authRouter.HandleFunc("/api/plugins/store/list", pluginManager.HandleListDownloadablePlugins)
+	authRouter.HandleFunc("/api/plugins/store/resync", pluginManager.HandleResyncPluginList)
+	authRouter.HandleFunc("/api/plugins/store/install", pluginManager.HandleInstallPlugin)
+	authRouter.HandleFunc("/api/plugins/store/uninstall", pluginManager.HandleUninstallPlugin)
+	authRouter.HandleFunc("/api/plugins/store/checkUpdates", pluginManager.HandleCheckPluginUpdates)
+	authRouter.HandleFunc("/api/plugins/store/update", pluginManager.HandleUpdatePlugin)
+	authRouter.HandleFunc("/api/plugins/store/sources", pluginManager.HandleListStoreSources)
+	authRouter.HandleFunc("/api/plugins/store/sources/add", pluginManager.HandleAddStoreSource)
+	authRouter.HandleFunc("/api/plugins/store/sources/remove", pluginManager.HandleRemoveStoreSource)
+
+	// Developer options
+	authRouter.HandleFunc("/api/plugins/developer/enableAutoReload", pluginManager.HandleEnableHotReload)
+	authRouter.HandleFunc("/api/plugins/developer/setAutoReloadInterval", pluginManager.HandleSetHotReloadInterval)
+}
+
+// Register the APIs for Auth functions, due to scoping issue some functions are defined here
+func RegisterAuthAPIs(requireAuth bool, targetMux *http.ServeMux) {
+	targetMux.HandleFunc("/api/auth/login", authAgent.HandleLogin)
+	targetMux.HandleFunc("/api/auth/logout", authAgent.HandleLogout)
+	targetMux.HandleFunc("/api/auth/checkLogin", func(w http.ResponseWriter, r *http.Request) {
 		if requireAuth {
 			authAgent.CheckLogin(w, r)
 		} else {
 			utils.SendJSONResponse(w, "true")
 		}
 	})
-	http.HandleFunc("/api/auth/username", func(w http.ResponseWriter, r *http.Request) {
+	targetMux.HandleFunc("/api/auth/authEnabled", func(w http.ResponseWriter, r *http.Request) {
+		//Report if the management interface authentication is enabled
+		//so the UI can hide auth related elements (e.g. logout button) in noauth mode
+		js, _ := json.Marshal(requireAuth)
+		utils.SendJSONResponse(w, string(js))
+	})
+	targetMux.HandleFunc("/api/auth/username", func(w http.ResponseWriter, r *http.Request) {
 		username, err := authAgent.GetUserName(w, r)
 		if err != nil {
 			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
 			return
 		}
-
 		js, _ := json.Marshal(username)
 		utils.SendJSONResponse(w, string(js))
 	})
-	http.HandleFunc("/api/auth/userCount", func(w http.ResponseWriter, r *http.Request) {
-		uc := authAgent.GetUserCounts()
-		js, _ := json.Marshal(uc)
+	targetMux.HandleFunc("/api/auth/userCount", func(w http.ResponseWriter, r *http.Request) {
+		js, _ := json.Marshal(authAgent.GetUserCounts())
 		utils.SendJSONResponse(w, string(js))
 	})
-	http.HandleFunc("/api/auth/register", func(w http.ResponseWriter, r *http.Request) {
+	targetMux.HandleFunc("/api/auth/register", func(w http.ResponseWriter, r *http.Request) {
 		if authAgent.GetUserCounts() == 0 {
 			//Allow register root admin
-			authAgent.HandleRegisterWithoutEmail(w, r, func(username, reserved string) {
-
-			})
+			authAgent.HandleRegisterWithoutEmail(w, r, func(username, reserved string) {})
 		} else {
 			//This function is disabled
 			utils.SendErrorResponse(w, "Root management account already exists")
 		}
 	})
-	http.HandleFunc("/api/auth/changePassword", func(w http.ResponseWriter, r *http.Request) {
+	targetMux.HandleFunc("/api/auth/changePassword", func(w http.ResponseWriter, r *http.Request) {
 		username, err := authAgent.GetUserName(w, r)
 		if err != nil {
 			http.Error(w, "401 - Unauthorized", http.StatusUnauthorized)
@@ -297,5 +390,77 @@ func registerAuthAPIs(requireAuth bool) {
 		authAgent.UnregisterUser(username)
 		authAgent.CreateUserAccount(username, newPassword, "")
 	})
+}
 
+/* Register all the APIs */
+func initAPIs(targetMux *http.ServeMux) {
+	authRouter := auth.NewManagedHTTPRouter(auth.RouterOption{
+		AuthAgent:   authAgent,
+		RequireAuth: requireAuth,
+		TargetMux:   targetMux,
+		DeniedHandler: func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "401 - Unauthorized", http.StatusUnauthorized)
+		},
+	})
+
+	// Register the standard web services URLs
+	var staticWebRes http.Handler
+	webFolderExists := utils.FileExists("web")
+	if *development_build && !webFolderExists {
+		fmt.Println("Warning: Development build is enabled but 'web' folder does not exist. Falling back to embedded static resources.")
+		fmt.Println("If you are developing the web UI, please make sure to have the 'web' folder in the same directory as the executable for a better development experience with hot reload.")
+	}
+	if *development_build && webFolderExists {
+		staticWebRes = http.FileServer(http.Dir("web/"))
+	} else {
+		subFS, err := fs.Sub(webres, "web")
+		if err != nil {
+			panic("Failed to strip 'web/' from embedded resources: " + err.Error())
+		}
+		staticWebRes = http.FileServer(http.FS(subFS))
+	}
+
+	//Add a layer of middleware for advance control
+	advHandler := FSHandler(staticWebRes)
+	targetMux.Handle("/", advHandler)
+
+	//Register the APIs
+	RegisterAuthAPIs(requireAuth, targetMux)
+	RegisterHTTPProxyAPIs(authRouter)
+	RegisterTLSAPIs(authRouter)
+	RegisterAuthenticationHandlerAPIs(authRouter)
+	RegisterZorxAuthUserManagementAPIs(authRouter)
+	RegisterRedirectionAPIs(authRouter)
+	RegisterAccessRuleAPIs(authRouter)
+	RegisterPathRuleAPIs(authRouter)
+	RegisterStatisticalAPIs(authRouter)
+	RegisterStreamProxyAPIs(authRouter)
+	RegisterMDNSAPIs(authRouter)
+	RegisterNetworkUtilsAPIs(authRouter)
+	RegisterACMEAndAutoRenewerAPIs(authRouter)
+	RegisterStaticWebServerAPIs(authRouter)
+	RegisterPluginAPIs(authRouter)
+
+	//Docker UX Optimizations
+	authRouter.HandleFunc("/api/docker/available", DockerUXOptimizer.HandleDockerAvailable)
+	authRouter.HandleFunc("/api/docker/containers", DockerUXOptimizer.HandleDockerContainersList)
+
+	//Others
+	targetMux.HandleFunc("/api/info/x", HandleZoraxyInfo)
+	authRouter.HandleFunc("/api/info/geoip", HandleGeoIpLookup)
+	authRouter.HandleFunc("/api/info/ipcheck", HandleIpAccessCheck)
+	authRouter.HandleFunc("/api/geodb/updateStatus", HandleGeoDBUpdateStatus)
+	authRouter.HandleFunc("/api/geodb/updateNow", HandleGeoDBUpdateNow)
+	authRouter.HandleFunc("/api/geodb/autoUpdate", HandleGeoDBAutoUpdate)
+	authRouter.HandleFunc("/api/conf/export", ExportConfigAsZip)
+	authRouter.HandleFunc("/api/conf/import", ImportConfigFromZip)
+	authRouter.HandleFunc("/api/log/list", LogViewer.HandleListLog)
+	authRouter.HandleFunc("/api/log/read", LogViewer.HandleReadLog)
+	authRouter.HandleFunc("/api/log/summary", LogViewer.HandleReadLogSummary)
+	authRouter.HandleFunc("/api/log/errors", LogViewer.HandleLogErrorSummary)
+	authRouter.HandleFunc("/api/log/rotate/trigger", SystemWideLogger.HandleDebugTriggerLogRotation)
+	authRouter.HandleFunc("/api/logger/config", handleLoggerConfig)
+
+	//Debug
+	authRouter.HandleFunc("/api/info/pprof", pprof.Index)
 }

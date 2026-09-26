@@ -3,17 +3,26 @@ package dpcore
 import (
 	"mime"
 	"net/http"
+	"strings"
 	"time"
 )
 
 // Auto sniff of flush interval from header
 func (p *ReverseProxy) getFlushInterval(req *http.Request, res *http.Response) time.Duration {
-	contentType := req.Header.Get("Content-Type")
+	contentType := res.Header.Get("Content-Type")
 	if actualContentType, _, _ := mime.ParseMediaType(contentType); actualContentType == "text/event-stream" {
 		return -1
 	}
 
-	if req.ContentLength == -1 || p.isBidirectionalStream(req, res) {
+	//An unknown response length means the upstream is streaming, e.g. chunked
+	//transfer encoding. See issue #1231.
+	if res.ContentLength == -1 || p.isBidirectionalStream(req, res) {
+		return -1
+	}
+
+	// Fixed issue #235: Added auto detection for ollama / llm output stream
+	connectionHeader := req.Header["Connection"]
+	if len(connectionHeader) > 0 && strings.Contains(strings.Join(connectionHeader, ","), "keep-alive") {
 		return -1
 	}
 

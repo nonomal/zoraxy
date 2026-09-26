@@ -1,7 +1,9 @@
 package access
 
 import (
+	"net"
 	"sync"
+	"time"
 
 	"imuslab.com/zoraxy/mod/database"
 	"imuslab.com/zoraxy/mod/geodb"
@@ -9,18 +11,24 @@ import (
 )
 
 type Options struct {
-	Logger       logger.Logger
-	ConfigFolder string             //Path for storing config files
-	GeoDB        *geodb.Store       //For resolving country code
-	Database     *database.Database //System key-value database
+	Logger             logger.Logger
+	ConfigFolder       string             //Path for storing config files
+	TrustedProxiesFile string             //Path for storing trusted proxy IPs
+	GeoDB              *geodb.Store       //For resolving country code
+	Database           *database.Database //System key-value database
+
+	/* Public IP monitoring */
+	PublicIpCheckInterval int64 //in Seconds
 }
 
 type AccessRule struct {
-	ID               string
-	Name             string
-	Desc             string
-	BlacklistEnabled bool
-	WhitelistEnabled bool
+	ID                             string
+	Name                           string
+	Desc                           string
+	BlacklistEnabled               bool
+	WhitelistEnabled               bool
+	WhitelistAllowLocalAndLoopback bool //Allow local and loopback address to bypass whitelist
+	TrustProxyHeadersOnly          bool //Only trust X-Forwarded-For and X-Real-IP headers from trusted proxies
 
 	/* Whitelist Blacklist Table, value is comment if supported */
 	WhiteListCountryCode *map[string]string
@@ -31,8 +39,21 @@ type AccessRule struct {
 	parent *Controller
 }
 
+type TrustedProxy struct {
+	IP   string
+	Desc string
+}
+
 type Controller struct {
+	ServerPublicIP    string
 	DefaultAccessRule *AccessRule
+	TrustedProxies    sync.Map // with structure of map[string]TrustedProxy
 	ProxyAccessRule   *sync.Map
 	Options           *Options
+
+	//Internal
+	publicIpTicker     *time.Ticker
+	publicIpTickerStop chan bool
+	trustedCIDRs       []*net.IPNet   // Pre-parsed CIDR entries for fast lookup
+	trustedCIDRMu      sync.RWMutex   // Protects trustedCIDRs
 }

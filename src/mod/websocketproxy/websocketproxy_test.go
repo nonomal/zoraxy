@@ -31,18 +31,24 @@ func TestProxy(t *testing.T) {
 	proxy := NewProxy(u, Options{
 		SkipTLSValidation: false,
 		SkipOriginCheck:   false,
+		Logger:            nil,
 	})
 	proxy.Upgrader = upgrader
 
 	mux := http.NewServeMux()
 	mux.Handle("/proxy", proxy)
+	errChan := make(chan error)
 	go func() {
 		if err := http.ListenAndServe(":7777", mux); err != nil {
-			t.Fatal("ListenAndServe: ", err)
+			errChan <- err
 		}
 	}()
 
-	time.Sleep(time.Millisecond * 100)
+	select {
+	case err := <-errChan:
+		t.Fatal("ListenAndServe: ", err)
+	case <-time.After(time.Millisecond * 100):
+	}
 
 	// backend echo server
 	go func() {
@@ -72,11 +78,15 @@ func TestProxy(t *testing.T) {
 
 		err := http.ListenAndServe(":8888", mux2)
 		if err != nil {
-			t.Fatal("ListenAndServe: ", err)
+			errChan <- err
 		}
 	}()
 
-	time.Sleep(time.Millisecond * 100)
+	select {
+	case err := <-errChan:
+		t.Fatal("ListenAndServe: ", err)
+	case <-time.After(time.Millisecond * 100):
+	}
 
 	// let's us define two subprotocols, only one is supported by the server
 	clientSubProtocols := []string{"test-protocol", "test-notsupported"}

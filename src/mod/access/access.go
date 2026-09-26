@@ -36,15 +36,16 @@ func NewAccessController(options *Options) (*Controller, error) {
 
 	// Create the global access rule if not exists
 	var defaultAccessRule = AccessRule{
-		ID:                   "default",
-		Name:                 "Default",
-		Desc:                 "Default access rule for all HTTP proxy hosts",
-		BlacklistEnabled:     false,
-		WhitelistEnabled:     false,
-		WhiteListCountryCode: &map[string]string{},
-		WhiteListIP:          &map[string]string{},
-		BlackListContryCode:  &map[string]string{},
-		BlackListIP:          &map[string]string{},
+		ID:                    "default",
+		Name:                  "Default",
+		Desc:                  "Default access rule for all HTTP proxy hosts",
+		BlacklistEnabled:      false,
+		WhitelistEnabled:      false,
+		TrustProxyHeadersOnly: false,
+		WhiteListCountryCode:  &map[string]string{},
+		WhiteListIP:           &map[string]string{},
+		BlackListContryCode:   &map[string]string{},
+		BlackListIP:           &map[string]string{},
 	}
 	defaultRuleSettingFile := filepath.Join(confFolder, "default.json")
 	if utils.FileExists(defaultRuleSettingFile) {
@@ -60,6 +61,7 @@ func NewAccessController(options *Options) (*Controller, error) {
 		//Create one
 		js, _ := json.MarshalIndent(defaultAccessRule, "", " ")
 		os.WriteFile(defaultRuleSettingFile, js, 0775)
+
 	}
 
 	//Generate a controller object
@@ -94,7 +96,7 @@ func NewAccessController(options *Options) (*Controller, error) {
 		thisAccessRule := AccessRule{}
 		err = json.Unmarshal(configContent, &thisAccessRule)
 		if err != nil {
-			options.Logger.PrintAndLog("Access", "Unable to parse config "+filepath.Base(configFile), err)
+			options.Logger.PrintAndLog("access", "Unable to parse config "+filepath.Base(configFile), err)
 			continue
 		}
 		thisAccessRule.parent = &thisController
@@ -102,6 +104,26 @@ func NewAccessController(options *Options) (*Controller, error) {
 	}
 	thisController.ProxyAccessRule = &ProxyAccessRules
 
+	// Load trusted proxies from file
+	err = thisController.LoadTrustedProxies()
+	if err != nil {
+		options.Logger.PrintAndLog("access", "Unable to load trusted proxies from file", err)
+		return nil, err
+	}
+
+	//Start the public ip ticker
+	if options.PublicIpCheckInterval <= 0 {
+		options.PublicIpCheckInterval = 12 * 60 * 60 //12 hours
+	}
+	thisController.ServerPublicIP = "127.0.0.1"
+	go func() {
+		err = thisController.UpdatePublicIP()
+		if err != nil {
+			options.Logger.PrintAndLog("access", "Unable to update public IP address", err)
+		}
+
+		thisController.StartPublicIPUpdater()
+	}()
 	return &thisController, nil
 }
 
@@ -116,12 +138,11 @@ func (c *Controller) GetGlobalAccessRule() (*AccessRule, error) {
 // Load access rules to runtime, require rule ID
 func (c *Controller) GetAccessRuleByID(accessRuleID string) (*AccessRule, error) {
 	if accessRuleID == "default" || accessRuleID == "" {
-
 		return c.DefaultAccessRule, nil
 	}
+
 	//Load from sync.Map, should be O(1)
 	targetRule, ok := c.ProxyAccessRule.Load(accessRuleID)
-
 	if !ok {
 		return nil, errors.New("target access rule not exists")
 	}
@@ -147,11 +168,7 @@ func (c *Controller) ListAllAccessRules() []*AccessRule {
 // Check if an access rule exists given the rule id
 func (c *Controller) AccessRuleExists(ruleID string) bool {
 	r, _ := c.GetAccessRuleByID(ruleID)
-	if r != nil {
-		//An access rule with identical ID exists
-		return true
-	}
-	return false
+	return r != nil
 }
 
 // Add a new access rule to runtime and save it to file
@@ -182,6 +199,7 @@ func (c *Controller) AddNewAccessRule(newRule *AccessRule) error {
 
 	//Save rule to file
 	newRule.SaveChanges()
+
 	return nil
 }
 
@@ -218,4 +236,8 @@ func (c *Controller) RemoveAccessRuleByID(ruleID string) error {
 
 	//Remove it
 	return c.DeleteAccessRuleByID(ruleID)
+}
+
+func (c *Controller) Close() {
+	c.StopPublicIPUpdater()
 }

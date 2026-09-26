@@ -16,6 +16,7 @@
                         <th>Target Address</th>
                         <th>Mode</th>
                         <th>Timeout (s)</th>
+                        <th>Enable Logging</th>
                         <th>Actions</th>
                     </tr>
                 </thead>
@@ -73,8 +74,42 @@
                     <small>Forward UDP request on this listening socket</small></label>
                 </div>
             </div>
-            <button id="addStreamProxyButton" class="ui basic button" type="submit"><i class="ui green add icon"></i> Create</button>  
-            <button id="editStreamProxyButton" class="ui basic button" onclick="confirmEditTCPProxyConfig(event);" style="display:none;"><i class="ui green check icon"></i> Update</button>  
+            <div class="field">
+                <div class="ui toggle checkbox">
+                    <input type="checkbox" tabindex="0" name="enableLogging" class="hidden">
+                    <label>Enable Logging<br>
+                        <small>Enable logging of connection status and errors for this rule</small>
+                    </label>
+                </div>
+            </div>
+            <div class="field">
+                <label>Proxy Protocol</label>
+                <select name="proxyProtocolVersion" class="ui dropdown">
+                    <option value="0">Disabled</option>
+                    <option value="1">Proxy Protocol V1</option>
+                    <option value="2">Proxy Protocol V2</option>
+                </select>
+                <small>Select Proxy Protocol v1 / v2 to use (if any)</small>
+                    <div id="proxyProtocolUdpWarning" style="display:none; color:#bd7100; margin-top:0.5em;">
+                        <i class="exclamation triangle icon"></i> Proxy Protocol V1 is not supported for UDP. The proxy protocol header will not be included in UDP packets if selected.
+                    </div>
+            </div>
+            <div class="field">
+                <label>Access Rule</label>
+                <div class="ui fluid selection dropdown" id="streamProxyAccessRuleDropdown">
+                    <input type="hidden" name="accessRuleUUID" value="default">
+                    <i class="dropdown icon"></i>
+                    <div class="default text">Default</div>
+                    <div class="menu" id="streamProxyAccessRuleList">
+                        <div class="item" data-value="default"><i class="ui yellow star icon"></i> Default</div>
+                    </div>
+                </div>
+                <small>Select which access rule (blacklist / whitelist) applies to connections on this proxy rule. Uses "Default" if the selected rule is removed.</small>
+            </div>
+            <div tourstep="create_stream_proxy_btn" style="display:inline-block;">
+                <button id="addStreamProxyButton" class="ui basic button" type="submit"><i class="ui green add icon"></i> Create</button>  
+            </div>
+            <button id="editStreamProxyButton" class="ui basic button" onclick="confirmEditTCPProxyConfig(event, this);" style="display:none;"><i class="ui green check icon"></i> Update</button>  
             <button class="ui basic red button" onclick="event.preventDefault(); cancelStreamProxyEdit(event);"><i class="ui red remove icon"></i> Cancel</button>  
         </form>
     </div>
@@ -82,13 +117,51 @@
     <script>
         let editingStreamProxyConfigUUID = ""; //The current editing TCP Proxy config UUID
 
+        // Show/hide warning for Proxy Protocol V1 + UDP
+        function updateProxyProtocolUdpWarning() {
+            const proxyProtocolVersion = $("#streamProxyForm select[name=proxyProtocolVersion]").val();
+            const useUDP = $("#streamProxyForm input[name=useUDP]")[0].checked;
+            if (proxyProtocolVersion === "1" && useUDP) {
+                $("#proxyProtocolUdpWarning").show();
+            } else {
+                $("#proxyProtocolUdpWarning").hide();
+            }
+        }
+
+        $("#streamProxyForm select[name=proxyProtocolVersion]").on("change", updateProxyProtocolUdpWarning);
+        $("#streamProxyForm input[name=useUDP]").on("change", updateProxyProtocolUdpWarning);
+        $(document).ready(updateProxyProtocolUdpWarning);
+
         $("#streamProxyForm .dropdown").dropdown();
+
+        // Load access rules into the dropdown
+        function initStreamProxyAccessRuleDropdown(callback) {
+            $.get("/api/access/list", function(data) {
+                if (data.error == undefined) {
+                    $("#streamProxyAccessRuleList").html("");
+                    data.forEach(function(rule) {
+                        let icon = `<i class="ui grey filter icon"></i>`;
+                        if (rule.ID == "default") {
+                            icon = `<i class="ui yellow star icon"></i>`;
+                        } else if (rule.BlacklistEnabled && !rule.WhitelistEnabled) {
+                            icon = `<i class="ui red filter icon"></i>`;
+                        } else if (rule.WhitelistEnabled && !rule.BlacklistEnabled) {
+                            icon = `<i class="ui green filter icon"></i>`;
+                        }
+                        $("#streamProxyAccessRuleList").append(`<div class="item" data-value="${rule.ID}">${icon} ${rule.Name}</div>`);
+                    });
+                    $("#streamProxyAccessRuleDropdown").dropdown();
+                    if (callback != undefined) { callback(); }
+                }
+            });
+        }
+        initStreamProxyAccessRuleDropdown();
         $('#streamProxyForm').on('submit', function(event) {
             event.preventDefault();
 
             //Check if update mode
             if ($("#editStreamProxyButton").is(":visible")){
-                confirmEditTCPProxyConfig(event);
+                confirmEditTCPProxyConfig(event,$("#editStreamProxyButton")[0]);
                 return;
             }
 
@@ -100,10 +173,20 @@
             }
 
             // Send the AJAX POST request
-            $.ajax({
+            $.cjax({
                 type: 'POST',
                 url: '/api/streamprox/config/add',
-                data: form.serialize(),
+                data: {
+                    name: $("#streamProxyForm input[name=name]").val().trim(),
+                    listenAddr: $("#streamProxyForm input[name=listenAddr]").val().trim(),
+                    proxyAddr: $("#streamProxyForm input[name=proxyAddr]").val().trim(),
+                    useTCP: $("#streamProxyForm input[name=useTCP]")[0].checked,
+                    useUDP: $("#streamProxyForm input[name=useUDP]")[0].checked,
+                    proxyProtocolVersion: parseInt($("#streamProxyForm select[name=proxyProtocolVersion]").val(), 10),
+                    enableLogging: $("#streamProxyForm input[name=enableLogging]")[0].checked,
+                    timeout: parseInt($("#streamProxyForm input[name=timeout]").val().trim()),
+                    accessRuleUUID: $("#streamProxyForm input[name=accessRuleUUID]").val().trim(),
+                },
                 success: function(response) {
                     if (response.error) {
                         msgbox(response.error, false, 6000);
@@ -120,9 +203,11 @@
         });
             
         function clearStreamProxyAddEditForm(){
-            $('#streamProxyForm input, #streamProxyForm select').val('');
-            $('#streamProxyForm select').dropdown('clear');
+            $('#streamProxyForm').find('input:not([type=checkbox]), select').val('');
+            $('#streamProxyForm select[name=proxyProtocolVersion]').dropdown('set selected', '0');
             $("#streamProxyForm input[name=timeout]").val(10);
+            $("#streamProxyForm .toggle.checkbox").checkbox("set unchecked");
+            $("#streamProxyAccessRuleDropdown").dropdown("set selected", "default");
         }
 
         function cancelStreamProxyEdit(event=undefined) {
@@ -194,6 +279,12 @@
                         modeText.push("UDP")
                     }
 
+                    if (config.ProxyProtocolVersion === 1) {
+                        modeText.push("ProxyProtocol V1");
+                    } else if (config.ProxyProtocolVersion === 2) {
+                        modeText.push("ProxyProtocol V2");
+                    }
+
                     modeText = modeText.join(" & ")
 
                     var thisConfig = encodeURIComponent(JSON.stringify(config));
@@ -206,6 +297,10 @@
                     row.append($('<td>').text(config.ProxyTargetAddr));
                     row.append($('<td>').text(modeText));
                     row.append($('<td>').text(config.Timeout));
+                    row.append($('<td>').html(config.EnableLogging ? 
+                        '<i class="green check icon" title="Logging Enabled"></i>' : 
+                        '<i class="red times icon" title="Logging Disabled"></i>'
+                    ));
                     row.append($('<td>').html(`
                         ${startButton}
                         <button onclick="editTCPProxyConfig('${config.UUID}');" class="ui circular basic mini icon button" title="Edit Config"><i class="edit icon"></i></button>
@@ -251,6 +346,22 @@
                             $(checkboxEle).checkbox("set unchecked");
                         }
                         return;
+                    }else if (key == "ProxyProtocolVersion") {
+                        $("#streamProxyForm select[name=proxyProtocolVersion]").dropdown("set selected", value);
+                        return;
+                    }else if (key == "EnableLogging"){
+                        let checkboxEle = $("#streamProxyForm input[name=enableLogging]").parent();
+                        if (value === true){
+                            $(checkboxEle).checkbox("set checked");
+                        }else{
+                            $(checkboxEle).checkbox("set unchecked");
+                        }
+                        return;
+                    }else if (key == "AccessRuleUUID"){
+                        initStreamProxyAccessRuleDropdown(function(){
+                            $("#streamProxyAccessRuleDropdown").dropdown("set selected", value || "default");
+                        });
+                        return;
                     }else if (key == "ListeningAddress"){
                         field = $("#streamProxyForm input[name=listenAddr]");
                     }else if (key == "ProxyTargetAddr"){
@@ -273,18 +384,23 @@
             }
         }
 
-        function confirmEditTCPProxyConfig(event){
+        function confirmEditTCPProxyConfig(event, btn){
             event.preventDefault();
             event.stopImmediatePropagation();
             var form = $("#streamProxyForm");
+            let originalButtonHTML = $(btn).html();
+            $(btn).html(`<i class="ui loading spinner icon"></i> Updating`);
+            $(btn).addClass("disabled");
 
             var formValid = validateTCPProxyConfig(form);
             if (!formValid){
+                $(btn).html(originalButtonHTML);
+                $(btn).removeClass("disabled");
                 return;
             }
 
             // Send the AJAX POST request
-            $.ajax({
+            $.cjax({
                 type: 'POST',
                 url: '/api/streamprox/config/edit',
                 method: "POST",
@@ -295,9 +411,14 @@
                     proxyAddr: $("#streamProxyForm input[name=proxyAddr]").val().trim(),
                     useTCP: $("#streamProxyForm input[name=useTCP]")[0].checked ,
                     useUDP: $("#streamProxyForm input[name=useUDP]")[0].checked ,
+                    proxyProtocolVersion: parseInt($("#streamProxyForm select[name=proxyProtocolVersion]").val(), 10),
+                    enableLogging: $("#streamProxyForm input[name=enableLogging]")[0].checked ,
                     timeout: parseInt($("#streamProxyForm input[name=timeout]").val().trim()),
+                    accessRuleUUID: $("#streamProxyForm input[name=accessRuleUUID]").val().trim(),
                 },
                 success: function(response) {
+                    $(btn).html(originalButtonHTML);
+                    $(btn).removeClass("disabled");
                     if (response.error) {
                         msgbox(response.error, false, 6000);
                     }else{
@@ -305,16 +426,19 @@
                     }
                     initProxyConfigList();
                     cancelStreamProxyEdit();
+                    clearStreamProxyAddEditForm();
                     
                 },
                 error: function() {
+                    $(btn).html(originalButtonHTML);
+                    $(btn).removeClass("disabled");
                     msgbox('An error occurred while processing the request', false);
                 }
             });
         }
 
         function deleteTCPProxyConfig(configUUID){
-            $.ajax({
+            $.cjax({
                 url: "/api/streamprox/config/delete",
                 method: "POST",
                 data: {uuid: configUUID},
@@ -331,7 +455,7 @@
 
         //Start a TCP proxy by their config UUID
         function startStreamProx(configUUID){
-            $.ajax({
+            $.cjax({
                 url: "/api/streamprox/config/start",
                 method: "POST",
                 data: {uuid: configUUID},
@@ -349,7 +473,7 @@
 
         //Stop a TCP proxy by their config UUID
         function stopStreamProx(configUUID){
-            $.ajax({
+            $.cjax({
                 url: "/api/streamprox/config/stop",
                 method: "POST",
                 data: {uuid: configUUID},
@@ -378,5 +502,13 @@
             });
         }
         initProxyConfigList();
+
+        //Bind on tab switch events
+        tabSwitchEventBind["streamproxy"] = function(){
+            // Re-render the list to update the running status of each proxy
+            initProxyConfigList();
+            // Update access rules in the dropdown in case they are changed in the Access Rules tab
+            initStreamProxyAccessRuleDropdown();
+        }
     </script>
 </div>

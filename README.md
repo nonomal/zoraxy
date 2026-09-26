@@ -4,7 +4,6 @@
 
 A general purpose HTTP reverse proxy and forwarding tool. Now written in Go!
 
-
 ### Features
 
 - Simple to use interface with detail in-system instructions
@@ -14,42 +13,58 @@ A general purpose HTTP reverse proxy and forwarding tool. Now written in Go!
   - Basic Auth
   - Alias Hostnames
   - Custom Headers
+  - Load Balancing
 - Redirection Rules
 - TLS / SSL setup and deploy
   - ACME features like auto-renew to serve your sites in http**s**
   - SNI support (and SAN certs)
   - DNS Challenge for Let's Encrypt and [these DNS providers](https://go-acme.github.io/lego/dns/)
 - Blacklist / Whitelist by country or IP address (single IP, CIDR or wildcard for beginners)
-- Global Area Network Controller Web UI (ZeroTier not included)
-- TCP Tunneling / Proxy
+- Stream Proxy (TCP & UDP)
 - Integrated Up-time Monitor
 - Web-SSH Terminal
+- Plugin System
 - Utilities
   - CIDR IP converters
   - mDNS Scanner
+  - Wake-On-Lan
+  - Debug Forward Proxy
   - IP Scanner
+  - Port Scanner
+- Community Contributed Features
+  - Forward-Auth Support (e.g. Authelia, Authentik)
+  - Oauth2 Support 
+  - reCAPTCHA 
+
 - Others
   - Basic single-admin management mode
   - External permission management system for easy system integration
   - SMTP config for password reset
+  - Dark Theme Mode
 
 ## Downloads
 
 [Windows](https://github.com/tobychui/zoraxy/releases/latest/download/zoraxy_windows_amd64.exe)
-/[Linux (amd64)](https://github.com/tobychui/zoraxy/releases/latest/download/zoraxy_linux_amd64)
-/[Linux (arm64)](https://github.com/tobychui/zoraxy/releases/latest/download/zoraxy_linux_arm64)
+/ [Linux (amd64)](https://github.com/tobychui/zoraxy/releases/latest/download/zoraxy_linux_amd64)
+/ [Linux (arm64)](https://github.com/tobychui/zoraxy/releases/latest/download/zoraxy_linux_arm64)
 
-For other systems or architectures, please see [Release](https://github.com/tobychui/zoraxy/releases/latest/) 
+For other systems or architectures, please see [Releases](https://github.com/tobychui/zoraxy/releases/latest/) 
 
 ## Getting Started
+
 [Installing Zoraxy Reverse Proxy: Your Gateway to Efficient Web Routing](https://geekscircuit.com/installing-zoraxy-reverse-proxy-your-gateway-to-efficient-web-routing/)
 
-Thank you for the well written and easy to follow tutorial by Reddit users [itsvmn](https://www.reddit.com/user/itsvmn/)! 
+Thank you for the well written and easy to follow tutorial by Reddit user [itsvmn](https://www.reddit.com/user/itsvmn/)! 
 If you have no background in setting up reverse proxy or web routing, you should check this out before you start setting up your Zoraxy. 
+
+### Switching from Nginx / NPM? 
+Check out our new (experimental) nginx to Zoraxy config converter!
+
+[Launch Config Converter](https://zoraxy.aroz.org/nginx2zoraxy.html)
 
 ## Build from Source
 
-Requires Go 1.22 or higher
+Requires Go 1.23 or higher
 
 ```bash
 git clone https://github.com/tobychui/zoraxy
@@ -62,7 +77,7 @@ sudo ./zoraxy -port=:8000
 
 ## Usage
 
-Zoraxy provides basic authentication system for standalone mode. To use it in standalone mode, follow the instructionss below for your desired deployment platform.
+Zoraxy provides basic authentication system for standalone mode. To use it in standalone mode, follow the instructions below for your desired deployment platform.
 
 ### Standalone Mode
 
@@ -90,36 +105,64 @@ The installation method is same as Linux. For other ARM SBCs, please refer to yo
 
 See the [/docker](https://github.com/tobychui/zoraxy/tree/main/docker) folder for more details.
 
-### Start Paramters
+### Start Parameters
 
 ```
 Usage of zoraxy:
+  -acmetestmode
+        Run ACME in test/staging mode
   -autorenew int
         ACME auto TLS/SSL certificate renew check interval (seconds) (default 86400)
+  -cfgupgrade
+        Enable auto config upgrade if breaking change is detected (default true)
+  -conf string
+        Configuration folder path (default "./conf")
+  -db string
+        Database backend to use (leveldb, boltdb, auto) Note that fsdb will be used on unsupported platforms like RISCV (default "auto")
+  -dbpath string
+        Database path (default "./sys.db")
+  -default_inbound_enabled
+        If web server is enabled by default (default true)
+  -default_inbound_port int
+        Default web server listening port (default 443)
+  -dev
+        Use external web folder for UI development
+  -docker
+        Run Zoraxy in docker compatibility mode
+  -earlyrenew int
+        Number of days to early renew a soon expiring certificate (days) (default 30)
+  -enablelog
+        Enable system wide logging, set to false for writing log to STDOUT only (default true)
+  -experimental_proxy_protocol
+        Enable PROXY protocol v1/v2 support for TLS listener (experimental)
   -fastgeoip
         Enable high speed geoip lookup, require 1GB extra memory (Not recommend for low end devices)
-  -log
-        Log terminal output to file (default true)
+  -log string
+        Log folder path (default "./log")
   -mdns
         Enable mDNS scanner and transponder (default true)
   -mdnsname string
         mDNS name, leave empty to use default (zoraxy_{node-uuid}.local)
   -noauth
         Disable authentication for management interface
+  -plugin string
+        Plugin folder path (default "./plugins")
   -port string
         Management web interface listening port (default ":8000")
+  -reset_ac
+        Reset admin account username and password to default and exit
   -sshlb
         Allow loopback web ssh connection (DANGER)
+  -tmp string
+        Temporary folder path (default "./tmp")
+  -update_geoip
+        Download the latest GeoIP data and exit
+  -uuid string
+        sys.uuid file path (default "./sys.uuid")
   -version
         Show version of this server
-  -webfm
-        Enable web file manager for static web server root folder (default true)
   -webroot string
-        Static web server root folder. Only allow chnage in start paramters (default "./www")
-  -ztauth string
-        ZeroTier authtoken for the local node
-  -ztport int
-        ZeroTier controller API port (default 9993)
+        Static web server root folder. Only allow change in start paramters (default "./www")
 ```
 
 ### External Permission Management Mode
@@ -130,7 +173,8 @@ If you already have an upstream reverse proxy server in place with permission ma
 ./zoraxy -noauth=true
 ```
 
-*Note: For security reaons, you should only enable no-auth if you are running Zoraxy in a trusted environment or with another authentication management proxy in front.*
+> [!WARNING]
+> For security reasons, you should only enable no-auth if you are running Zoraxy in a trusted environment or with another authentication management proxy in front.*
 
 ## Screenshots
 
@@ -146,19 +190,7 @@ There is a wikipage with [Frequently-Asked-Questions](https://github.com/tobychu
 
 ## Global Area Network Controller
 
-This project also compatible with [ZeroTier](https://www.zerotier.com/). However, due to licensing issues, ZeroTier is not included in the binary. 
-
-To use Zoraxy with ZeroTier, assuming you already have a valid license, install ZeroTier on your host and then run Zoraxy in sudo mode (or Run As Administrator if you are on Windows). The program will automatically grab the authtoken in the correct location on your host.
-
-If you prefer not to run Zoraxy in sudo mode or you have some weird installation profile, you can also pass in the ZeroTier auth token using the following flags::
-
-```bash
-./zoraxy -ztauth="your_zerotier_authtoken" -ztport=9993
-```
-
-The ZeroTier auth token can usually be found at ```/var/lib/zerotier-one/authtoken.secret``` or ```C:\ProgramData\ZeroTier\One\authtoken.secret```. 
-
-This allows you to have an infinite number of network members in your Global Area Network controller. For more technical details, see [here](https://docs.zerotier.com/self-hosting/network-controllers/).
+Moved to official plugin repo, see [ztnc](https://github.com/aroz-online/zoraxy-official-plugins/tree/main/src/ztnc) plugin
 
 ## Web SSH
 
@@ -171,21 +203,62 @@ Web SSH currently only supports Linux based OSes. The following platforms are su
 
 ### Loopback Connection
 
-Loopback web SSH connection, by default, is disabled. This means that if you are trying to connect to an address like 127.0.0.1 or localhost, the system will reject your connection for security reasons. To enable loopback for testing or development purpose, use the following flags to override the loopback checking:
+Loopback web SSH connections, by default, are disabled. This means that if you are trying to connect to an address like 127.0.0.1 or localhost, the system will reject your connection for security reasons. To enable loopback for testing or development purpose, use the following flags to override the loopback checking:
 
 ```bash
 ./zoraxy -sshlb=true
 ```
+
+## Community Maintained Sections
+
+Some section of Zoraxy are contributed by our amazing community and if you have any issues regarding those sections, it would be more efficient if you can tag them directly when creating an issue report.
+
+- Forward Auth [@james-d-elliott](https://github.com/james-d-elliott)
+
+  - (Legacy) Authelia Support added by [@7brend7](https://github.com/7brend7)
+
+  - (Legacy) Authentik Support added by [@JokerQyou](https://github.com/JokerQyou)
+
+- Oauth2 [@kjagosz](https://github.com/kjagosz)
+
+- ACME
+
+  - ACME integration (Looking for maintainer)
+
+  - DNS Challenge by [@zen8841](https://github.com/zen8841)
+
+- Docker Container List by [@eyerrock](https://github.com/eyerrock)
+
+- Change Log [@Morethanevil](https://github.com/Morethanevil)
+
+### Looking for Maintainer
+
+- ACME integration (Auto-renew & Zoraxy integration)
+
+- Zoraxy Auth (Build-in basic SSO feature) 
+
+- Logging (including analysis & attack prevention) Module
+
+Thank you so much for your contributions!
+
+### Notes on Security Advisories
+
+Due to recent automated / AI generated advisories, we will no longer accept security advisories directly open on Github.
+
+If you spot a secuity issue and want to create a security advisories, please contact us via Discord and provide your Github username. Then we will assign you an advisory number for filling in your advisory title. For advisories that do not have a advisory number, we will close it immediately.
+
+**Updates 2026-06-26**
+
+Due to recent floods of AI generated security advisory, Private vulnerability reporting feature of this repo is temporary closed. If you have a critical issue to report, you can reach our maintainer on Discord. 
 
 ## Sponsor This Project
 
 If you like the project and want to support us, please consider a donation. You can use the links below
 
 - [tobychui (Primary author)](https://paypal.me/tobychui)
-- PassiveLemon (Docker compatibility maintainer)
+- [PassiveLemon (Docker compatibility maintainer)](https://github.com/PassiveLemon)
 
 ## License
 
 This project is open-sourced under AGPL. I open-sourced this project so everyone can check for security issues and benefit all users. **This software is intended to be free of charge. If you have acquired this software from a third-party seller, the authors of this repository bears no responsibility for any technical difficulties assistance or support.**
-
 

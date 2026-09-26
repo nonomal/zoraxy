@@ -29,17 +29,20 @@ func getCertPairs(certFiles []string) []string {
 	return result
 }
 
-// Get the cloest subdomain certificate from a list of domains
-func matchClosestDomainCertificate(subdomain string, domains []string) string {
-	var matchingDomain string = ""
-	maxLength := 0
+// Convert a domain name to a filename format
+func domainToFilename(domain string, ext string) string {
+	domain = filepath.Base(strings.TrimSpace(domain))
 
-	for _, domain := range domains {
-		if strings.HasSuffix(subdomain, "."+domain) && len(domain) > maxLength {
-			matchingDomain = domain
-			maxLength = len(domain)
-		}
+	// Replace wildcard '*' with '_'
+	domain = strings.TrimSpace(domain)
+	if trimDomain, ok := strings.CutPrefix(domain, "*"); ok {
+		domain = "_" + trimDomain
 	}
 
-	return matchingDomain
+	if strings.HasPrefix(".", ext) {
+		ext = strings.TrimPrefix(ext, ".") // Ensure ext does not start with a dot
+	}
+
+	// Add .pem extension
+	return domain + "." + ext
 }

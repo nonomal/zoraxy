@@ -69,7 +69,7 @@
                     </div>
 
                     <!-- Advance configs -->
-                    <div class="ui basic segment" style="background-color: #f7f7f7; border-radius: 1em;">
+                    <div class="ui basic segment advanceoptions">
                         <div id="advanceProxyRules" class="ui fluid accordion">
                             <div class="title">
                             <i class="dropdown icon"></i>
@@ -190,15 +190,20 @@
     function updateVDTargetTLSState(){
         var targetDomain = $("#virtualDirectoryDomain").val().trim();
         if (targetDomain != ""){
-            $.ajax({
-                url: "/api/proxy/tlscheck",
+            $.cjax({
+                url: "/api/proxy/tlscheck?selfsignchk=true",
                 data: {url: targetDomain},
                 success: function(data){
                     if (data.error != undefined){
 
-                    }else if (data == "https"){
+                    }else if (data.protocol == "https"){
                         $("#vdReqTls").parent().checkbox("set checked");
-                    }else if (data == "http"){
+                        if (data.selfsign){
+                            $("#vdSkipTLSValidation").parent().checkbox("set checked");
+                        }else{
+                            $("#vdSkipTLSValidation").parent().checkbox("set unchecked");
+                        }
+                    }else if (data.protocol == "http"){
                         $("#vdReqTls").parent().checkbox("set unchecked");
                     }
                 }
@@ -252,7 +257,7 @@
         }
 
         //Create a virtual directory endpoint
-        $.ajax({
+        $.cjax({
             url: "/api/proxy/vdir/add",
             method: "POST",
             data: {
@@ -295,7 +300,7 @@
             epType = "root";
             path = "";
         }
-        $.ajax({
+        $.cjax({
             url: "/api/proxy/vdir/del",
             method: "POST",
             data: {
@@ -384,7 +389,7 @@
 
         //console.log(mathingPath, newDomain, requireTLS, skipValidation);
 
-        $.ajax({
+        $.cjax({
             url: "/api/proxy/vdir/edit",
             method: "POST",
             data: {

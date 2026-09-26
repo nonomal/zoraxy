@@ -1,7 +1,7 @@
 package redirection
 
 import (
-	"log"
+	"errors"
 	"net/http"
 	"strings"
 )
@@ -13,11 +13,42 @@ import (
 	redirection request
 */
 
-// Check if a request URL is a redirectable URI
+// detectDeviceType determines if the request is from a mobile or desktop device
+// based on the User-Agent header
+func detectDeviceType(r *http.Request) string {
+	userAgent := strings.ToLower(r.Header.Get("User-Agent"))
+
+	// List of common mobile device indicators
+	mobileIndicators := []string{
+		"mobile", "android", "iphone", "ipad", "ipod", "blackberry",
+		"windows phone", "webos", "opera mini", "opera mobi",
+	}
+
+	for _, indicator := range mobileIndicators {
+		if strings.Contains(userAgent, indicator) {
+			return "mobile"
+		}
+	}
+
+	return "desktop"
+}
+
+// Check if a request URL is a redirectable URI and device type matches
 func (t *RuleTable) IsRedirectable(r *http.Request) bool {
 	requestPath := r.Host + r.URL.Path
 	rr := t.MatchRedirectRule(requestPath)
-	return rr != nil
+
+	if rr == nil || !rr.Enabled {
+		return false
+	}
+
+	// Check if device type matches
+	if rr.DeviceType == "" || rr.DeviceType == "all" {
+		return true
+	}
+
+	deviceType := detectDeviceType(r)
+	return rr.DeviceType == deviceType
 }
 
 // Handle the redirect request, return after calling this function to prevent
@@ -52,7 +83,7 @@ func (t *RuleTable) HandleRedirect(w http.ResponseWriter, r *http.Request) int {
 		//Invalid usage
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte("500 - Internal Server Error"))
-		log.Println("Target request URL do not have matching redirect rule. Check with IsRedirectable before calling HandleRedirect!")
+		t.log("Target request URL do not have matching redirect rule. Check with IsRedirectable before calling HandleRedirect!", errors.New("invalid usage"))
 		return 500
 	}
 }

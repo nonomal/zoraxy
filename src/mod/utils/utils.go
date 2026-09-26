@@ -2,7 +2,9 @@ package utils
 
 import (
 	"errors"
+	"html"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -40,37 +42,78 @@ func SendOK(w http.ResponseWriter) {
 
 // Get GET parameter
 func GetPara(r *http.Request, key string) (string, error) {
-	keys, ok := r.URL.Query()[key]
-	if !ok || len(keys[0]) < 1 {
+	// Get first value from the URL query
+	value := r.URL.Query().Get(key)
+	if len(value) == 0 {
 		return "", errors.New("invalid " + key + " given")
-	} else {
-		return keys[0], nil
 	}
+	return value, nil
 }
 
-// Get POST paramter
+// Get GET parameter as boolean, only accept "true" or "false" (case insensitive)
+func GetBool(r *http.Request, key string) (bool, error) {
+	x, err := GetPara(r, key)
+	if err != nil {
+		return false, err
+	}
+
+	// Convert to lowercase and trim spaces just once to compare
+	switch strings.ToLower(strings.TrimSpace(x)) {
+	case "true":
+		return true, nil
+	case "false":
+		return false, nil
+	}
+
+	return false, errors.New("invalid boolean given")
+}
+
+// Get POST parameter
 func PostPara(r *http.Request, key string) (string, error) {
-	r.ParseForm()
-	x := r.Form.Get(key)
-	if x == "" {
-		return "", errors.New("invalid " + key + " given")
-	} else {
-		return x, nil
+	// Try to parse the form
+	if err := r.ParseForm(); err != nil {
+		return "", err
 	}
+	// Get first value from the form
+	x := r.Form.Get(key)
+	if len(x) == 0 {
+		return "", errors.New("invalid " + key + " given")
+	}
+	return x, nil
 }
 
-// Get POST paramter as boolean, accept 1 or true
+// Get POST parameter as time.Duration
+func PostDuration(r *http.Request, key string) (*time.Duration, error) {
+	// Try to parse the form
+	if err := r.ParseForm(); err != nil {
+		return nil, err
+	}
+	// Get first value from the form
+	x := r.Form.Get(key)
+	if len(x) == 0 {
+		return nil, errors.New("invalid " + key + " given")
+	}
+
+	duration, err := time.ParseDuration(x)
+
+	if err != nil {
+		return nil, errors.Join(errors.New("invalid "+key+" duration"), err)
+	}
+	return &duration, nil
+}
+
+// Get POST parameter as boolean, only accept "true" or "false" (case insensitive)
 func PostBool(r *http.Request, key string) (bool, error) {
 	x, err := PostPara(r, key)
 	if err != nil {
 		return false, err
 	}
 
-	x = strings.TrimSpace(x)
-
-	if x == "1" || strings.ToLower(x) == "true" || strings.ToLower(x) == "on" {
+	// Convert to lowercase and trim spaces just once to compare
+	switch strings.ToLower(strings.TrimSpace(x)) {
+	case "true":
 		return true, nil
-	} else if x == "0" || strings.ToLower(x) == "false" || strings.ToLower(x) == "off" {
+	case "false":
 		return false, nil
 	}
 
@@ -95,14 +138,19 @@ func PostInt(r *http.Request, key string) (int, error) {
 
 func FileExists(filename string) bool {
 	_, err := os.Stat(filename)
-	if os.IsNotExist(err) {
+	if err == nil {
+		// File exists
+		return true
+	} else if errors.Is(err, os.ErrNotExist) {
+		// File does not exist
 		return false
 	}
-	return true
+	// Some other error
+	return false
 }
 
 func IsDir(path string) bool {
-	if FileExists(path) == false {
+	if !FileExists(path) {
 		return false
 	}
 	fi, err := os.Stat(path)
@@ -140,4 +188,42 @@ func StringInArrayIgnoreCase(arr []string, str string) bool {
 	}
 
 	return StringInArray(smallArray, strings.ToLower(str))
+}
+
+// Validate if the listening address is correct
+func ValidateListeningAddress(address string) bool {
+	// Check if the address starts with a colon, indicating it's just a port
+	if strings.HasPrefix(address, ":") {
+		return true
+	}
+
+	// Split the address into host and port parts
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		// Try to parse it as just a port
+		if _, err := strconv.Atoi(address); err == nil {
+			return false // It's just a port number
+		}
+		return false // It's an invalid address
+	}
+
+	// Check if the port part is a valid number
+	if _, err := strconv.Atoi(port); err != nil {
+		return false
+	}
+
+	// Check if the host part is a valid IP address or empty (indicating any IP)
+	if host != "" {
+		if net.ParseIP(host) == nil {
+			return false
+		}
+	}
+
+	return true
+}
+
+// SanitizeLogContent escapes special HTML characters in log content to prevent XSS attacks.
+// See #1028
+func SanitizeLogContent(content string) string {
+	return html.EscapeString(content)
 }

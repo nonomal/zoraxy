@@ -3,12 +3,15 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/google/uuid"
 	"github.com/microcosm-cc/bluemonday"
 
 	"imuslab.com/zoraxy/mod/access"
+	"imuslab.com/zoraxy/mod/eventsystem"
+	"imuslab.com/zoraxy/mod/plugins/zoraxy_plugin/events"
 	"imuslab.com/zoraxy/mod/utils"
 )
 
@@ -74,6 +77,10 @@ func handleCreateAccessRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ruleDesc, _ := utils.PostPara(r, "desc")
+	trustProxy, err := utils.PostBool(r, "trustProxy")
+	if err != nil {
+		trustProxy = false
+	}
 
 	//Filter out injection if any
 	p := bluemonday.StripTagsPolicy()
@@ -82,11 +89,12 @@ func handleCreateAccessRule(w http.ResponseWriter, r *http.Request) {
 
 	ruleUUID := uuid.New().String()
 	newAccessRule := access.AccessRule{
-		ID:               ruleUUID,
-		Name:             ruleName,
-		Desc:             ruleDesc,
-		BlacklistEnabled: false,
-		WhitelistEnabled: false,
+		ID:                    ruleUUID,
+		Name:                  ruleName,
+		Desc:                  ruleDesc,
+		BlacklistEnabled:      false,
+		WhitelistEnabled:      false,
+		TrustProxyHeadersOnly: trustProxy,
 	}
 
 	//Add it to runtime
@@ -95,6 +103,18 @@ func handleCreateAccessRule(w http.ResponseWriter, r *http.Request) {
 		utils.SendErrorResponse(w, err.Error())
 		return
 	}
+
+	// emit an event for the new access rule creation
+	eventsystem.Publisher.Emit(
+		&events.AccessRuleCreatedEvent{
+			ID:                    ruleUUID,
+			Name:                  ruleName,
+			Desc:                  ruleDesc,
+			BlacklistEnabled:      false,
+			WhitelistEnabled:      false,
+			TrustProxyHeadersOnly: trustProxy,
+		},
+	)
 
 	utils.SendOK(w)
 }
@@ -196,9 +216,10 @@ func handleListBlacklisted(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resulst := []string{}
-	if bltype == "country" {
+	switch bltype {
+	case "country":
 		resulst = rule.GetAllBlacklistedCountryCode()
-	} else if bltype == "ip" {
+	case "ip":
 		resulst = rule.GetAllBlacklistedIp()
 	}
 
@@ -230,7 +251,17 @@ func handleCountryBlacklistAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rule.AddCountryCodeToBlackList(countryCode, comment)
+	//Check if the country code contains comma, if yes, split it
+	if strings.Contains(countryCode, ",") {
+		codes := strings.Split(countryCode, ",")
+		for _, code := range codes {
+			code = strings.TrimSpace(code)
+			rule.AddCountryCodeToBlackList(code, comment)
+		}
+	} else {
+		countryCode = strings.TrimSpace(countryCode)
+		rule.AddCountryCodeToBlackList(countryCode, comment)
+	}
 
 	utils.SendOK(w)
 }
@@ -254,7 +285,17 @@ func handleCountryBlacklistRemove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rule.RemoveCountryCodeFromBlackList(countryCode)
+	//Check if the country code contains comma, if yes, split it
+	if strings.Contains(countryCode, ",") {
+		codes := strings.Split(countryCode, ",")
+		for _, code := range codes {
+			code = strings.TrimSpace(code)
+			rule.RemoveCountryCodeFromBlackList(code)
+		}
+	} else {
+		countryCode = strings.TrimSpace(countryCode)
+		rule.RemoveCountryCodeFromBlackList(countryCode)
+	}
 
 	utils.SendOK(w)
 }
@@ -329,14 +370,17 @@ func handleBlacklistEnable(w http.ResponseWriter, r *http.Request) {
 		js, _ := json.Marshal(currentEnabled)
 		utils.SendJSONResponse(w, string(js))
 	} else {
-		if enable == "true" {
-			rule.ToggleBlacklist(true)
-		} else if enable == "false" {
-			rule.ToggleBlacklist(false)
-		} else {
+		enableBlacklist, err := utils.PostBool(r, "enable")
+		if err != nil {
 			utils.SendErrorResponse(w, "invalid enable state: only true and false is accepted")
 			return
 		}
+		rule.ToggleBlacklist(enableBlacklist)
+
+		eventsystem.Publisher.Emit(&events.BlacklistToggledEvent{
+			RuleID:  ruleID,
+			Enabled: rule.BlacklistEnabled,
+		})
 
 		utils.SendOK(w)
 	}
@@ -397,7 +441,17 @@ func handleCountryWhitelistAdd(w http.ResponseWriter, r *http.Request) {
 	p := bluemonday.StrictPolicy()
 	comment = p.Sanitize(comment)
 
-	rule.AddCountryCodeToWhitelist(countryCode, comment)
+	//Check if the country code contains comma, if yes, split it
+	if strings.Contains(countryCode, ",") {
+		codes := strings.Split(countryCode, ",")
+		for _, code := range codes {
+			code = strings.TrimSpace(code)
+			rule.AddCountryCodeToWhitelist(code, comment)
+		}
+	} else {
+		countryCode = strings.TrimSpace(countryCode)
+		rule.AddCountryCodeToWhitelist(countryCode, comment)
+	}
 
 	utils.SendOK(w)
 }
@@ -420,7 +474,17 @@ func handleCountryWhitelistRemove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rule.RemoveCountryCodeFromWhitelist(countryCode)
+	//Check if the country code contains comma, if yes, split it
+	if strings.Contains(countryCode, ",") {
+		codes := strings.Split(countryCode, ",")
+		for _, code := range codes {
+			code = strings.TrimSpace(code)
+			rule.RemoveCountryCodeFromWhitelist(code)
+		}
+	} else {
+		countryCode = strings.TrimSpace(countryCode)
+		rule.RemoveCountryCodeFromWhitelist(countryCode)
+	}
 
 	utils.SendOK(w)
 }
@@ -493,15 +557,308 @@ func handleWhitelistEnable(w http.ResponseWriter, r *http.Request) {
 		js, _ := json.Marshal(currentEnabled)
 		utils.SendJSONResponse(w, string(js))
 	} else {
-		if enable == "true" {
-			rule.ToggleWhitelist(true)
-		} else if enable == "false" {
-			rule.ToggleWhitelist(false)
-		} else {
+		enableWhitelist, err := utils.PostBool(r, "enable")
+		if err != nil {
 			utils.SendErrorResponse(w, "invalid enable state: only true and false is accepted")
 			return
 		}
+		rule.ToggleWhitelist(enableWhitelist)
 
 		utils.SendOK(w)
 	}
+}
+
+func handleWhitelistAllowLoopback(w http.ResponseWriter, r *http.Request) {
+	enable, _ := utils.PostPara(r, "enable")
+	ruleID, err := utils.PostPara(r, "id")
+	if err != nil {
+		ruleID = "default"
+	}
+
+	rule, err := accessController.GetAccessRuleByID(ruleID)
+	if err != nil {
+		utils.SendErrorResponse(w, err.Error())
+		return
+	}
+
+	if enable == "" {
+		//Return the current enabled state
+		currentEnabled := rule.WhitelistAllowLocalAndLoopback
+		js, _ := json.Marshal(currentEnabled)
+		utils.SendJSONResponse(w, string(js))
+	} else {
+		allowLoopback, err := utils.PostBool(r, "enable")
+		if err != nil {
+			utils.SendErrorResponse(w, "invalid enable state: only true and false is accepted")
+			return
+		}
+		rule.ToggleAllowLoopback(allowLoopback)
+
+		utils.SendOK(w)
+	}
+}
+
+// Handle toggle for TrustProxyHeadersOnly setting
+func handleWhitelistTrustProxy(w http.ResponseWriter, r *http.Request) {
+	enable, _ := utils.PostPara(r, "enable")
+	ruleID, err := utils.PostPara(r, "id")
+	if err != nil {
+		ruleID = "default"
+	}
+
+	rule, err := accessController.GetAccessRuleByID(ruleID)
+	if err != nil {
+		utils.SendErrorResponse(w, err.Error())
+		return
+	}
+
+	if enable == "" {
+		//Return the current enabled state
+		currentEnabled := rule.TrustProxyHeadersOnly
+		js, _ := json.Marshal(currentEnabled)
+		utils.SendJSONResponse(w, string(js))
+	} else {
+		trustProxy, err := utils.PostBool(r, "enable")
+		if err != nil {
+			utils.SendErrorResponse(w, "invalid enable state: only true and false is accepted")
+			return
+		}
+		rule.ToggleTrustProxy(trustProxy)
+
+		utils.SendOK(w)
+	}
+}
+
+/*
+	Trusted Proxy Management
+*/
+
+// List all trusted proxies
+func handleListTrustedProxies(w http.ResponseWriter, r *http.Request) {
+	proxies := accessController.ListTrustedProxies()
+	js, _ := json.Marshal(proxies)
+	utils.SendJSONResponse(w, string(js))
+}
+
+// Add a new trusted proxy
+func handleAddTrustedProxy(w http.ResponseWriter, r *http.Request) {
+	ip, err := utils.PostPara(r, "ip")
+	if err != nil {
+		utils.SendErrorResponse(w, "invalid or empty ip address")
+		return
+	}
+
+	desc, _ := utils.PostPara(r, "desc")
+
+	//Sanitize inputs
+	p := bluemonday.StrictPolicy()
+	ip = strings.TrimSpace(ip)
+	desc = p.Sanitize(desc)
+
+	//Add the proxy
+	added := accessController.AddTrustedProxy(ip, desc)
+	if !added {
+		utils.SendErrorResponse(w, "proxy already exists")
+		return
+	}
+
+	//Save to file
+	err = accessController.SaveTrustedProxies()
+	if err != nil {
+		utils.SendErrorResponse(w, "failed to save trusted proxies: "+err.Error())
+		return
+	}
+
+	utils.SendOK(w)
+}
+
+// Remove a trusted proxy
+func handleRemoveTrustedProxy(w http.ResponseWriter, r *http.Request) {
+	ip, err := utils.PostPara(r, "ip")
+	if err != nil {
+		utils.SendErrorResponse(w, "invalid or empty ip address")
+		return
+	}
+
+	ip = strings.TrimSpace(ip)
+
+	//Remove the proxy
+	removed := accessController.RemoveTrustedProxy(ip)
+	if !removed {
+		utils.SendErrorResponse(w, "proxy not found")
+		return
+	}
+
+	//Save to file
+	err = accessController.SaveTrustedProxies()
+	if err != nil {
+		utils.SendErrorResponse(w, "failed to save trusted proxies: "+err.Error())
+		return
+	}
+
+	utils.SendOK(w)
+}
+
+// Update a trusted proxy (change IP or description)
+func handleUpdateTrustedProxy(w http.ResponseWriter, r *http.Request) {
+	originalIP, err := utils.PostPara(r, "original_ip")
+	if err != nil {
+		utils.SendErrorResponse(w, "original ip is required")
+		return
+	}
+
+	newIP, err := utils.PostPara(r, "new_ip")
+	if err != nil {
+		utils.SendErrorResponse(w, "new ip is required")
+		return
+	}
+
+	desc, _ := utils.PostPara(r, "desc")
+
+	//Sanitize inputs
+	p := bluemonday.StrictPolicy()
+	originalIP = strings.TrimSpace(originalIP)
+	newIP = strings.TrimSpace(newIP)
+	desc = p.Sanitize(desc)
+
+	//If IP changed, check if new IP already exists as an entry
+	if originalIP != newIP {
+		if accessController.TrustedProxyExists(newIP) {
+			utils.SendErrorResponse(w, "new ip already exists as trusted proxy")
+			return
+		}
+	}
+
+	//Remove old entry
+	removed := accessController.RemoveTrustedProxy(originalIP)
+	if !removed {
+		utils.SendErrorResponse(w, "original proxy not found")
+		return
+	}
+
+	//Add new entry
+	accessController.AddTrustedProxy(newIP, desc)
+
+	//Save to file
+	err = accessController.SaveTrustedProxies()
+	if err != nil {
+		utils.SendErrorResponse(w, "failed to save trusted proxies: "+err.Error())
+		return
+	}
+
+	utils.SendOK(w)
+}
+
+// Bulk-replace the entire trusted proxy list from a CSV body.
+// Each non-empty line must be:  ip/cidr, description
+// Lines starting with # are treated as comments and skipped.
+func handleBulkUpdateTrustedProxies(w http.ResponseWriter, r *http.Request) {
+	csv, err := utils.PostPara(r, "csv")
+	if err != nil {
+		utils.SendErrorResponse(w, "csv parameter is required")
+		return
+	}
+
+	p := bluemonday.StrictPolicy()
+
+	// Parse the incoming CSV into (ip, desc) pairs before mutating state
+	type entry struct {
+		ip   string
+		desc string
+	}
+	var entries []entry
+	for _, rawLine := range strings.Split(csv, "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, ",", 2)
+		ip := strings.TrimSpace(parts[0])
+		if ip == "" {
+			continue
+		}
+		desc := ""
+		if len(parts) == 2 {
+			desc = p.Sanitize(strings.TrimSpace(parts[1]))
+		}
+		entries = append(entries, entry{ip: ip, desc: desc})
+	}
+
+	// Remove every existing entry
+	for _, proxy := range accessController.ListTrustedProxies() {
+		accessController.RemoveTrustedProxy(proxy.IP)
+	}
+
+	// Add the new entries in order
+	for _, e := range entries {
+		accessController.AddTrustedProxy(e.ip, e.desc)
+	}
+
+	// Persist
+	if err := accessController.SaveTrustedProxies(); err != nil {
+		utils.SendErrorResponse(w, "failed to save trusted proxies: "+err.Error())
+		return
+	}
+
+	utils.SendOK(w)
+}
+
+// Reset the trusted proxy list to the built-in defaults and return the new list.
+func handleResetDefaultTrustedProxies(w http.ResponseWriter, r *http.Request) {
+	// Remove all current entries
+	for _, proxy := range accessController.ListTrustedProxies() {
+		accessController.RemoveTrustedProxy(proxy.IP)
+	}
+
+	// Load defaults
+	for _, proxy := range accessController.GetDefaultTrustedProxies() {
+		accessController.AddTrustedProxy(proxy.IP, proxy.Desc)
+	}
+
+	// Persist
+	if err := accessController.SaveTrustedProxies(); err != nil {
+		utils.SendErrorResponse(w, "failed to save trusted proxies: "+err.Error())
+		return
+	}
+
+	// Return the new list so the UI can refresh without an extra round-trip
+	result := accessController.ListTrustedProxies()
+	js, _ := json.Marshal(result)
+	utils.SendJSONResponse(w, string(js))
+}
+
+// List all quick ban ip address
+func handleListQuickBan(w http.ResponseWriter, r *http.Request) {
+	currentSummary := statisticCollector.GetCurrentDailySummary()
+	type quickBanEntry struct {
+		IpAddr      string
+		Count       int
+		CountryCode string
+	}
+	result := []quickBanEntry{}
+	currentSummary.RequestClientIp.Range(func(key, value interface{}) bool {
+		ip := key.(string)
+		count := value.(int)
+		thisEntry := quickBanEntry{
+			IpAddr: ip,
+			Count:  count,
+		}
+
+		//Get the country code
+		geoinfo, err := geodbStore.ResolveCountryCodeFromIP(ip)
+		if err == nil {
+			thisEntry.CountryCode = geoinfo.CountryIsoCode
+		}
+
+		result = append(result, thisEntry)
+		return true
+	})
+
+	//Sort result based on count
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Count > result[j].Count
+	})
+
+	js, _ := json.Marshal(result)
+	utils.SendJSONResponse(w, string(js))
 }
